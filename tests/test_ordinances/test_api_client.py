@@ -48,14 +48,41 @@ def test_get_ordinance_detail_fetches_and_caches(monkeypatch):
     def fake_request(url, params):
         assert url.endswith("/lawService.do")
         assert params["target"] == "ordin"
+        assert params["ID"] == "2000111"
         return Response(b"<OrdinanceService />")
 
     monkeypatch.setattr(api_client, "_request", fake_request)
     monkeypatch.setattr(api_client.cache, "get_detail", lambda ordinance_id: None)
-    monkeypatch.setattr(api_client.cache, "put_detail", lambda ordinance_id, raw: calls.append((ordinance_id, raw)))
+    monkeypatch.setattr(
+        api_client.cache,
+        "put_detail",
+        lambda ordinance_id, raw: calls.append((ordinance_id, raw)),
+    )
 
     assert api_client.get_ordinance_detail("2000111") == b"<OrdinanceService />"
     assert calls == [("2000111", b"<OrdinanceService />")]
+
+
+def test_get_ordinance_detail_prefers_mst_when_available(monkeypatch):
+    calls = []
+
+    def fake_request(url, params):
+        assert url.endswith("/lawService.do")
+        assert params["target"] == "ordin"
+        assert params["MST"] == "1805167"
+        assert "ID" not in params
+        return Response(b"<OrdinanceService />")
+
+    monkeypatch.setattr(api_client, "_request", fake_request)
+    monkeypatch.setattr(api_client.cache, "get_detail", lambda ordinance_id: None)
+    monkeypatch.setattr(
+        api_client.cache,
+        "put_detail",
+        lambda ordinance_id, raw: calls.append((ordinance_id, raw)),
+    )
+
+    assert api_client.get_ordinance_detail("2148386", mst="1805167") == b"<OrdinanceService />"
+    assert calls == [("2148386", b"<OrdinanceService />")]
 
 
 def test_search_ordinances_raises_api_error(monkeypatch):

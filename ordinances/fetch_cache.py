@@ -75,12 +75,12 @@ def fetch_all_current(
     return entries
 
 
-def _fetch_detail_task(ordinance_id: str, counter: Counter) -> None:
+def _fetch_detail_task(ordinance_id: str, ordinance_mst: str, counter: Counter) -> None:
     if cache.get_detail(ordinance_id) is not None:
         counter.inc("cached")
         return
     try:
-        get_ordinance_detail(ordinance_id)
+        get_ordinance_detail(ordinance_id, mst=ordinance_mst)
         record_requests(1, corpus="ordinances")
         checkpoint.mark_detail_processed(ordinance_id)
         counter.inc("fetched")
@@ -97,13 +97,16 @@ def fetch_details(entries: list[dict], workers: int = CONCURRENT_WORKERS, limit:
         ordinance_id = str(entry.get("자치법규ID", ""))
         if ordinance_id and ordinance_id not in seen:
             seen.add(ordinance_id)
-            ids.append(ordinance_id)
+            ids.append((ordinance_id, str(entry.get("자치법규일련번호", ""))))
     if limit is not None:
         ids = ids[:limit]
 
     counter = Counter()
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = [pool.submit(_fetch_detail_task, ordinance_id, counter) for ordinance_id in ids]
+        futures = [
+            pool.submit(_fetch_detail_task, ordinance_id, ordinance_mst, counter)
+            for ordinance_id, ordinance_mst in ids
+        ]
         for future in as_completed(futures):
             future.result()
     return counter

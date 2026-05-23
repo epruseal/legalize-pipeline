@@ -55,23 +55,31 @@ def test_fetch_details_deduplicates_and_limits(monkeypatch):
     fetched = []
 
     monkeypatch.setattr(fetch_cache.cache, "get_detail", lambda ordinance_id: None)
-    monkeypatch.setattr(fetch_cache, "get_ordinance_detail", lambda ordinance_id: fetched.append(ordinance_id))
+    monkeypatch.setattr(
+        fetch_cache,
+        "get_ordinance_detail",
+        lambda ordinance_id, mst="": fetched.append((ordinance_id, mst)),
+    )
     monkeypatch.setattr(fetch_cache.checkpoint, "mark_detail_processed", lambda ordinance_id: None)
     monkeypatch.setattr(fetch_cache, "record_requests", lambda count, corpus: None)
 
     counter = fetch_cache.fetch_details(
-        [{"자치법규ID": "1"}, {"자치법규ID": "1"}, {"자치법규ID": "2"}],
+        [
+            {"자치법규ID": "1", "자치법규일련번호": "mst-1"},
+            {"자치법규ID": "1", "자치법규일련번호": "mst-duplicate"},
+            {"자치법규ID": "2", "자치법규일련번호": "mst-2"},
+        ],
         workers=1,
         limit=1,
     )
-    assert fetched == ["1"]
+    assert fetched == [("1", "mst-1")]
     assert counter.snapshot() == (0, 1, 0)
 
 
 def test_fetch_details_records_detail_failures(monkeypatch):
     failures = []
 
-    def raise_detail(ordinance_id):
+    def raise_detail(ordinance_id, mst=""):
         raise RuntimeError(f"boom {ordinance_id}")
 
     monkeypatch.setattr(fetch_cache.cache, "get_detail", lambda ordinance_id: None)

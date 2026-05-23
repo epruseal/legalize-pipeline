@@ -77,14 +77,18 @@ def search_ordinances(
     return {"totalCnt": total, "page": page_num, "ordinances": items, "raw_xml": resp.content}
 
 
-def get_ordinance_detail(ordinance_id: str, *, refresh: bool = False) -> bytes:
+def get_ordinance_detail(ordinance_id: str, *, mst: str = "", refresh: bool = False) -> bytes:
     """Fetch and cache raw ordinance detail XML."""
     if not refresh:
         cached = cache.get_detail(str(ordinance_id))
         if cached:
             logger.debug("Cache hit: ordinance ID=%s", ordinance_id)
             return cached
-    params = {"target": "ordin", "ID": str(ordinance_id), "type": "XML"}
+    params = {"target": "ordin", "type": "XML"}
+    if mst:
+        params["MST"] = str(mst)
+    else:
+        params["ID"] = str(ordinance_id)
     resp = _request(f"{LAW_API_BASE}/lawService.do", params)
     root = ElementTree.fromstring(resp.content)
     _require_no_api_error(root, f"ordin detail ID={ordinance_id}")
