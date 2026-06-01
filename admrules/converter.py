@@ -492,7 +492,14 @@ def _metadata_from_xml(root: ElementTree.Element) -> dict:
 
 def _attachment_nodes(root: ElementTree.Element) -> list[dict]:
     attachments = []
-    for idx, node in enumerate(root.findall(".//별표"), start=1):
+    nodes = []
+    for bylaw in root.findall(".//별표"):
+        units = bylaw.findall(".//별표단위")
+        nodes.extend(units or [bylaw])
+    if not nodes:
+        nodes.extend(root.findall(".//별표단위"))
+
+    for idx, node in enumerate(nodes, start=1):
         file_link = _absolute_law_url(_find_first(node, ("별표서식파일링크", "별표파일링크")))
         pdf_link = _absolute_law_url(_find_first(node, ("별표서식PDF파일링크", "별표PDF파일링크")))
         if not file_link and not pdf_link:

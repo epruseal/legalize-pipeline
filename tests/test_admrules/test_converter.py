@@ -537,6 +537,57 @@ def test_xml_to_markdown_adds_attachment_links():
     }]
 
 
+def test_xml_to_markdown_adds_all_bylaw_unit_attachment_links():
+    xml = """
+    <AdmRulService>
+      <행정규칙ID>ABC</행정규칙ID>
+      <행정규칙일련번호>123</행정규칙일련번호>
+      <행정규칙명>첨부 고시</행정규칙명>
+      <행정규칙종류>고시</행정규칙종류>
+      <소관부처명>행정안전부</소관부처명>
+      <발령일자>20240504</발령일자>
+      <조문내용>제1조 목적</조문내용>
+      <별표>
+        <별표단위>
+          <별표번호>0001</별표번호>
+          <별표가지번호>00</별표가지번호>
+          <별표구분>별표</별표구분>
+          <별표제목><![CDATA[수수료]]></별표제목>
+          <별표서식파일링크>/LSW/flDownload.do?flSeq=1</별표서식파일링크>
+        </별표단위>
+        <별표단위>
+          <별표번호>0001</별표번호>
+          <별표가지번호>01</별표가지번호>
+          <별표구분>별지</별표구분>
+          <별표제목><![CDATA[신청서]]></별표제목>
+          <별표서식PDF파일링크>/LSW/flDownload.do?flSeq=2</별표서식PDF파일링크>
+        </별표단위>
+      </별표>
+    </AdmRulService>
+    """
+
+    md = xml_to_markdown(xml)
+    _, yaml_text, _ = md.split("---", 2)
+    fm = yaml.safe_load(yaml_text)
+
+    assert fm["첨부파일"] == [
+        {
+            "별표번호": "0001",
+            "별표가지번호": "00",
+            "별표구분": "별표",
+            "제목": "수수료",
+            "파일링크": "https://www.law.go.kr/LSW/flDownload.do?flSeq=1",
+        },
+        {
+            "별표번호": "0001",
+            "별표가지번호": "01",
+            "별표구분": "별지",
+            "제목": "신청서",
+            "PDF링크": "https://www.law.go.kr/LSW/flDownload.do?flSeq=2",
+        },
+    ]
+
+
 def test_xml_to_markdown_uses_parsing_failed_stub_when_body_empty():
     xml = """
     <AdmRulService>
