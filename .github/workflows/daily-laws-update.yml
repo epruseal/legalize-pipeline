@@ -74,6 +74,12 @@ jobs:
           . "$WORKSPACE_ROOT/.venv/bin/activate"
           python -m laws.validate
 
+      - name: Audit cache against law repo
+        working-directory: ${{ env.PIPELINE_REPO }}
+        run: |
+          . "$WORKSPACE_ROOT/.venv/bin/activate"
+          python -m laws.audit_cache_vs_repo --fail-on-missing-content --fail-on-new-path-drift
+
       - name: Report import failures
         working-directory: ${{ env.PIPELINE_REPO }}
         run: |

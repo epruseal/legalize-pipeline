@@ -27,6 +27,7 @@ from .converter import (
     law_to_markdown,
     normalize_law_name,
     parse_departments,
+    plan_current_law_paths,
     reset_path_registry,
 )
 from .git_engine import commit_law
@@ -267,6 +268,7 @@ def import_from_cache(
     limit: int | None = None,
     dry_run: bool = False,
     only_orphans: bool = False,
+    msts_filter: set[str] | None = None,
 ) -> int:
     """Import laws from cached raw XML files (no API calls).
 
@@ -280,6 +282,11 @@ def import_from_cache(
     if not msts:
         logger.warning("No cached data found. Run fetch_cache.py first.")
         return 0
+
+    if msts_filter is not None:
+        before = len(msts)
+        msts = sorted(set(msts) & {str(mst) for mst in msts_filter})
+        logger.info(f"msts_filter: {before} cached -> {len(msts)} selected")
 
     if only_orphans:
         from .generate_metadata import generate as _gen_metadata
@@ -326,6 +333,7 @@ def import_from_cache(
     if limit:
         entries = entries[:limit]
 
+    planned_paths = plan_current_law_paths(entries)
     logger.info(f"Importing {len(entries)} laws from cache")
 
     committed = 0
@@ -339,7 +347,7 @@ def import_from_cache(
         file_path = None
         try:
             law_id = meta.get("법령ID", "")
-            file_path = get_law_path(law_name, law_type, law_id)
+            file_path = planned_paths.get(mst) or get_law_path(law_name, law_type, law_id)
             abs_path = KR_DIR.parent / file_path
             prom_date = format_date(meta.get("공포일자", ""))
 
@@ -386,6 +394,16 @@ def import_from_cache(
 
     logger.info(f"Cache import done: committed={committed}, errors={errors}")
     return committed
+
+
+def _read_msts_filter(path: Path) -> set[str]:
+    """Read a newline-delimited MST allowlist, ignoring blanks and comments."""
+
+    return {
+        line.strip()
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -586,6 +604,8 @@ def main():
     parser.add_argument("--csv", type=Path, help="CSV file path (fallback mode)")
     parser.add_argument("--only-orphans", action="store_true",
                         help="Only import MSTs in cache not yet on disk (after --from-cache)")
+    parser.add_argument("--msts-list", type=Path,
+                        help="Path to newline-delimited MST list for --from-cache")
     parser.add_argument("--search-api", action="store_true",
                         help="Use operator-supplied name list to search API and fill gaps")
     parser.add_argument("--missing-laws-list", type=Path,
@@ -597,8 +617,12 @@ def main():
     if args.from_cache:
         if args.search_api:
             _run_search_api_recovery(args.missing_laws_list)
+        msts_filter = None
+        if args.msts_list:
+            msts_filter = _read_msts_filter(args.msts_list)
         committed = import_from_cache(args.law_type, args.limit, args.dry_run,
-                                      only_orphans=args.only_orphans)
+                                      only_orphans=args.only_orphans,
+                                      msts_filter=msts_filter)
     elif args.csv:
         committed = import_from_csv(args.csv, args.law_type, args.limit, args.dry_run)
     elif args.law_name:

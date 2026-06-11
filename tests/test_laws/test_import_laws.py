@@ -190,3 +190,40 @@ def test_import_from_cache_flow(tmp_path: Path):
         count = import_laws.import_from_cache()
 
     assert count == 1
+
+
+def test_import_from_cache_uses_latest_title_path_for_same_law_id():
+    details = {
+        "1": {
+            "metadata": {
+                "법령명한글": "송유관사업법", "법령MST": "1", "법령ID": "000123",
+                "법령구분": "법률", "법령구분코드": "법률", "소관부처명": "산업통상자원부",
+                "공포일자": "19900101", "공포번호": "1", "시행일자": "19900101",
+            },
+            "articles": [], "addenda": [],
+        },
+        "2": {
+            "metadata": {
+                "법령명한글": "송유관 안전관리법", "법령MST": "2", "법령ID": "000123",
+                "법령구분": "법률", "법령구분코드": "법률", "소관부처명": "산업통상자원부",
+                "공포일자": "20200101", "공포번호": "2", "시행일자": "20200101",
+            },
+            "articles": [], "addenda": [],
+        },
+    }
+
+    with patch("laws.import_laws.cache") as mock_cache, \
+         patch("laws.import_laws.get_law_detail", side_effect=lambda mst: details[mst]), \
+         patch("laws.import_laws.get_processed_msts", return_value=set()), \
+         patch("laws.import_laws.mark_processed"), \
+         patch("laws.import_laws.law_to_markdown", return_value="# 본문\n\n내용"), \
+         patch("laws.import_laws.commit_law", return_value="abc1234") as mock_commit:
+        mock_cache.list_cached_msts.return_value = ["1", "2"]
+        count = import_laws.import_from_cache()
+
+    assert count == 2
+    committed_paths = [call.args[0] for call in mock_commit.call_args_list]
+    assert committed_paths == [
+        "kr/송유관안전관리법/법률.md",
+        "kr/송유관안전관리법/법률.md",
+    ]

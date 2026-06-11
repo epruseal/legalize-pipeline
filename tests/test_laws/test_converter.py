@@ -16,6 +16,7 @@ from laws.converter import (
     law_to_markdown,
     normalize_law_name,
     parse_departments,
+    plan_current_law_paths,
     reset_path_registry,
 )
 
@@ -202,6 +203,44 @@ def test_law_path_no_disk_check():
     path = get_law_path("민법 시행규칙", "부령", "001111")
     assert path == "kr/민법/시행규칙.md"
     assert "(" not in path
+
+
+def _detail(name: str, law_type: str, law_id: str, prom_date: str, prom_num: str) -> dict:
+    return {
+        "metadata": {
+            "법령명한글": name,
+            "법령구분": law_type,
+            "법령ID": law_id,
+            "공포일자": prom_date,
+            "공포번호": prom_num,
+        }
+    }
+
+
+def test_plan_current_law_paths_uses_latest_title_for_same_law_id():
+    entries = [
+        ("1", _detail("송유관사업법", "법률", "000123", "19900101", "1")),
+        ("2", _detail("송유관 안전관리법", "법률", "000123", "20200101", "2")),
+    ]
+
+    paths = plan_current_law_paths(entries)
+
+    assert paths == {
+        "1": "kr/송유관안전관리법/법률.md",
+        "2": "kr/송유관안전관리법/법률.md",
+    }
+
+
+def test_plan_current_law_paths_qualifies_only_real_latest_path_collisions():
+    entries = [
+        ("1", _detail("테스트법 시행규칙", "총리령", "AAA", "20200101", "1")),
+        ("2", _detail("테스트법 시행규칙", "부령", "BBB", "20200102", "2")),
+    ]
+
+    paths = plan_current_law_paths(entries)
+
+    assert paths["1"] == "kr/테스트법/시행규칙.md"
+    assert paths["2"] == "kr/테스트법/시행규칙(부령).md"
 
 
 # ---------------------------------------------------------------------------
