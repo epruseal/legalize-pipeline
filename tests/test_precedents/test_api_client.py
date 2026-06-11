@@ -64,6 +64,22 @@ def test_get_precedent_detail_from_cache(tmp_path: Path):
 
 
 @responses_lib.activate
+def test_get_precedent_detail_refresh_bypasses_cache(tmp_path: Path):
+    cached = """<?xml version="1.0" encoding="UTF-8"?><PrecService><판례정보일련번호>123456</판례정보일련번호><사건명>old</사건명></PrecService>""".encode("utf-8")
+    refreshed = """<?xml version="1.0" encoding="UTF-8"?><PrecService><판례정보일련번호>123456</판례정보일련번호><사건명>new</사건명></PrecService>""".encode("utf-8")
+    prec_cache.put_detail("123456", cached)
+    responses_lib.add(
+        responses_lib.GET, f"{LAW_API_BASE}/lawService.do", body=refreshed, status=200
+    )
+
+    result = prec_api.get_precedent_detail("123456", refresh=True)
+
+    assert result == refreshed
+    assert prec_cache.get_detail("123456") == refreshed
+    assert len(responses_lib.calls) == 1
+
+
+@responses_lib.activate
 def test_get_precedent_detail_no_result_raises_and_does_not_cache():
     """Upstream returns <Law>일치하는 판례가 없습니다...</Law> for some IDs.
 
