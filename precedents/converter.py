@@ -308,7 +308,7 @@ def precedent_to_markdown(parsed: dict) -> str:
     serial = parsed.get("판례정보일련번호", "")
     case_no = parsed.get("사건번호", "")
     case_name = normalize_case_name(parsed.get("사건명", ""))
-    court_name = normalize_court_name(parsed.get("법원명", ""))
+    court_name = normalize_court_name((parsed.get("법원명", "") or "").strip())
     court_code = parsed.get("법원종류코드", "")
     court_tier = get_court_tier(court_code, court_name)
     case_type = normalize_case_type(parsed.get("사건종류명", ""))

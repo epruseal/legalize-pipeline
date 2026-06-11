@@ -279,6 +279,29 @@ def test_precedent_to_markdown_has_valid_frontmatter():
     assert fm["첨부파일"] == []
 
 
+@pytest.mark.parametrize(
+    ("raw_court_name", "expected_court_name"),
+    [
+        (" 대법원", "대법원"),
+        ("\t\t대법원", "대법원"),
+        (" 서울고법 ", "서울고등법원"),
+    ],
+)
+def test_precedent_to_markdown_trims_court_name_frontmatter(
+    raw_court_name, expected_court_name
+):
+    original_court_name = "<법원명>대법원</법원명>".encode("utf-8")
+    replacement_court_name = f"<법원명>{raw_court_name}</법원명>".encode("utf-8")
+    data = conv.parse_precedent_xml(
+        VALID_XML.replace(original_court_name, replacement_court_name)
+    )
+    assert data is not None
+    md = conv.precedent_to_markdown(data)
+    end = md.index("---\n", 4)
+    fm = yaml.safe_load(md[4:end])
+    assert fm["법원명"] == expected_court_name
+
+
 def test_precedent_to_markdown_omits_empty_sections():
     data = conv.parse_precedent_xml(EMPTY_SECTIONS_XML)
     md = conv.precedent_to_markdown(data)
