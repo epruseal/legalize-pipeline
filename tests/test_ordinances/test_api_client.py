@@ -74,15 +74,16 @@ def test_get_ordinance_detail_prefers_mst_when_available(monkeypatch):
         return Response(b"<OrdinanceService />")
 
     monkeypatch.setattr(api_client, "_request", fake_request)
-    monkeypatch.setattr(api_client.cache, "get_detail", lambda ordinance_id: None)
+    monkeypatch.setattr(api_client.cache, "get_detail", lambda key: None)
     monkeypatch.setattr(
         api_client.cache,
         "put_detail",
-        lambda ordinance_id, raw: calls.append((ordinance_id, raw)),
+        lambda key, raw: calls.append((key, raw)),
     )
 
     assert api_client.get_ordinance_detail("2148386", mst="1805167") == b"<OrdinanceService />"
-    assert calls == [("2148386", b"<OrdinanceService />")]
+    # Cached by MST, not by ID, so revisions stay distinct.
+    assert calls == [("1805167", b"<OrdinanceService />")]
 
 
 def test_search_ordinances_raises_api_error(monkeypatch):

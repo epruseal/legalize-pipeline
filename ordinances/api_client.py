@@ -78,11 +78,17 @@ def search_ordinances(
 
 
 def get_ordinance_detail(ordinance_id: str, *, mst: str = "", refresh: bool = False) -> bytes:
-    """Fetch and cache raw ordinance detail XML."""
+    """Fetch and cache raw ordinance detail XML.
+
+    Cached by MST (자치법규일련번호) when available so that distinct revisions of
+    the same 자치법규ID are stored separately. Falls back to keying by ID only
+    when no MST is supplied (single-version callers).
+    """
+    cache_key = str(mst) if mst else str(ordinance_id)
     if not refresh:
-        cached = cache.get_detail(str(ordinance_id))
+        cached = cache.get_detail(cache_key)
         if cached:
-            logger.debug("Cache hit: ordinance ID=%s", ordinance_id)
+            logger.debug("Cache hit: ordinance MST=%s ID=%s", mst, ordinance_id)
             return cached
     params = {"target": "ordin", "type": "XML"}
     if mst:
@@ -91,6 +97,6 @@ def get_ordinance_detail(ordinance_id: str, *, mst: str = "", refresh: bool = Fa
         params["ID"] = str(ordinance_id)
     resp = _request(f"{LAW_API_BASE}/lawService.do", params)
     root = ElementTree.fromstring(resp.content)
-    _require_no_api_error(root, f"ordin detail ID={ordinance_id}")
-    cache.put_detail(str(ordinance_id), resp.content)
+    _require_no_api_error(root, f"ordin detail ID={ordinance_id} MST={mst}")
+    cache.put_detail(cache_key, resp.content)
     return resp.content

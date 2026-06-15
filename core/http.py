@@ -33,6 +33,14 @@ def make_request(
                 continue
             resp.raise_for_status()
             return resp
+        except requests.HTTPError as e:
+            if e.response is not None and 400 <= e.response.status_code < 500:
+                raise
+            if attempt == max_retries:
+                raise
+            wait = backoff_base * (2 ** attempt)
+            logger.warning(f"Request failed: {e}. Retry {attempt + 1}/{max_retries} in {wait}s")
+            time.sleep(wait)
         except requests.RequestException as e:
             if attempt == max_retries:
                 raise

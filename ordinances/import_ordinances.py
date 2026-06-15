@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 def build_commit_msg(metadata: dict) -> str:
     ordinance_id = metadata.get("자치법규ID", "")
+    mst = metadata.get("자치법규일련번호", "")
     title = f"{metadata.get('자치법규종류', '')}: {metadata.get('자치법규명', '')}"
     if metadata.get("제개정구분"):
         title += f" ({metadata['제개정구분']})"
@@ -27,14 +28,15 @@ def build_commit_msg(metadata: dict) -> str:
         f"공포번호: {metadata.get('공포번호', '')}",
         f"지자체기관명: {metadata.get('지자체기관명', '')}",
         f"자치법규ID: {ordinance_id}",
+        f"자치법규일련번호: {mst}",
     ])
 
 
-def cached_entries(limit: int | None = None, ids: list[str] | None = None) -> list[tuple[str, bytes]]:
-    ids = list(ids) if ids is not None else cache.list_cached_ids()
+def cached_entries(limit: int | None = None, msts: list[str] | None = None) -> list[tuple[str, bytes]]:
+    msts = list(msts) if msts is not None else cache.list_cached_msts()
     if limit is not None:
-        ids = ids[:limit]
-    return [(ordinance_id, cache.get_detail(ordinance_id) or b"") for ordinance_id in ids]
+        msts = msts[:limit]
+    return [(mst, cache.get_detail(mst) or b"") for mst in msts]
 
 
 def _sort_key(entry: dict) -> tuple[str, int, str]:
@@ -61,14 +63,14 @@ def import_from_cache(
     *,
     limit: int | None = None,
     commit: bool = False,
-    ids: list[str] | None = None,
+    msts: list[str] | None = None,
     skip_dedup: bool = False,
 ) -> dict[str, int]:
     counters = {"written": 0, "committed": 0, "skipped": 0, "errors": 0}
     repo_dir.mkdir(parents=True, exist_ok=True)
     reset_path_registry()
     entries = []
-    for ordinance_id, raw in cached_entries(limit, ids):
+    for mst, raw in cached_entries(limit, msts):
         if not raw:
             counters["skipped"] += 1
             continue
@@ -76,8 +78,8 @@ def import_from_cache(
             detail = parse_ordinance_xml(raw)
             rel_path, markdown = xml_to_markdown(raw, use_registry=True)
             entries.append({
-                "ordinance_id": ordinance_id,
-                "identity": str(detail["metadata"].get("자치법규ID") or ordinance_id),
+                "mst": str(detail["metadata"].get("자치법규일련번호") or mst),
+                "identity": str(detail["metadata"].get("자치법규ID") or mst),
                 "metadata": detail["metadata"],
                 "rel_path": rel_path,
                 "markdown": markdown,
@@ -85,7 +87,7 @@ def import_from_cache(
         except UnsupportedOrdinanceType:
             counters["skipped"] += 1
         except Exception:
-            logger.exception("Failed parsing ordinance ID=%s", ordinance_id)
+            logger.exception("Failed parsing ordinance MST=%s", mst)
             counters["errors"] += 1
 
     latest_paths: dict[str, str] = {}
@@ -109,13 +111,13 @@ def import_from_cache(
                     rel_path,
                     build_commit_msg(meta),
                     date,
-                    entry["ordinance_id"],
+                    entry["mst"],
                     skip_dedup=skip_dedup,
                     stale_paths=stale_paths,
                 ):
                     counters["committed"] += 1
         except Exception:
-            logger.exception("Failed importing ordinance ID=%s", entry["ordinance_id"])
+            logger.exception("Failed importing ordinance MST=%s", entry["mst"])
             counters["errors"] += 1
     return counters
 

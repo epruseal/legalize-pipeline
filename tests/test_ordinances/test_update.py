@@ -9,13 +9,13 @@ def test_run_fetches_then_imports(tmp_path, monkeypatch):
             return (1, 2, 3)
 
     calls = []
-    monkeypatch.setattr(update, "fetch_all_current", lambda types, **kwargs: calls.append(("fetch", types, kwargs)) or [{"자치법규ID": "1"}])
+    monkeypatch.setattr(update, "fetch_all_current", lambda types, **kwargs: calls.append(("fetch", types, kwargs)) or [{"자치법규ID": "1", "자치법규일련번호": "100"}])
     monkeypatch.setattr(update, "fetch_details", lambda entries, workers, limit: calls.append(("details", entries, workers, limit)) or Counter())
-    monkeypatch.setattr(update, "_committed_ids", lambda repo: set())
+    monkeypatch.setattr(update, "_committed_msts", lambda repo: set())
     monkeypatch.setattr(
         update,
         "import_from_cache",
-        lambda repo, limit, commit, ids, skip_dedup: calls.append(("import", repo, limit, commit, ids, skip_dedup))
+        lambda repo, limit, commit, msts, skip_dedup: calls.append(("import", repo, limit, commit, msts, skip_dedup))
         or {"written": 4, "committed": 5, "skipped": 6, "errors": 7},
     )
 
@@ -32,10 +32,10 @@ def test_run_fetches_then_imports(tmp_path, monkeypatch):
         "errors": 7,
     }
     assert calls[0] == ("fetch", ["조례"], {"org": "11", "sborg": "110", "max_entries": 10, "date_range": "range-14"})
-    assert calls[2] == ("import", tmp_path, None, True, ["1"], True)
+    assert calls[2] == ("import", tmp_path, None, True, ["100"], True)
 
 
-def test_run_imports_only_uncommitted_current_ids(tmp_path, monkeypatch):
+def test_run_imports_only_uncommitted_msts(tmp_path, monkeypatch):
     class Counter:
         def snapshot(self):
             return (2, 0, 0)
@@ -45,21 +45,21 @@ def test_run_imports_only_uncommitted_current_ids(tmp_path, monkeypatch):
         update,
         "fetch_all_current",
         lambda types, **kwargs: [
-            {"자치법규ID": "1"},
-            {"자치법규ID": "2"},
-            {"자치법규ID": "2"},
+            {"자치법규ID": "1", "자치법규일련번호": "100"},
+            {"자치법규ID": "2", "자치법규일련번호": "200"},
+            {"자치법규ID": "2", "자치법규일련번호": "200"},
         ],
     )
     monkeypatch.setattr(update, "fetch_details", lambda entries, workers, limit: Counter())
-    monkeypatch.setattr(update, "_committed_ids", lambda repo: {"1"})
+    monkeypatch.setattr(update, "_committed_msts", lambda repo: {"100"})
     monkeypatch.setattr(
         update,
         "import_from_cache",
-        lambda repo, limit, commit, ids, skip_dedup: imported.extend(ids)
+        lambda repo, limit, commit, msts, skip_dedup: imported.extend(msts)
         or {"written": 1, "committed": 1, "skipped": 0, "errors": 0},
     )
     monkeypatch.setattr(update, "_date_range", lambda days: f"range-{days}")
 
     update.run(repo=tmp_path, commit=True)
 
-    assert imported == ["2"]
+    assert imported == ["200"]

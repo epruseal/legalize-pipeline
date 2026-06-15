@@ -11,11 +11,13 @@ def commit_ordinance(
     file_path: str,
     message: str,
     date: str,
-    ordinance_id: str,
+    mst: str,
     *,
     skip_dedup: bool = False,
     stale_paths: list[str] | None = None,
 ) -> bool:
-    key = None if skip_dedup else f"자치법규ID: {ordinance_id}"
+    # Dedup on MST (자치법규일련번호) so distinct revisions of one 자치법규ID are
+    # each committed; the key must match the line emitted in build_commit_msg.
+    key = None if skip_dedup else f"자치법규일련번호: {mst}"
     paths = [Path(file_path), *[Path(path) for path in stale_paths or []]]
     return commit_with_historical_date(repo_dir, paths, message, date, author=BOT_AUTHOR, dedup_grep_key=key)

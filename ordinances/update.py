@@ -19,18 +19,18 @@ def _date_range(days: int) -> str:
     return f"{since:%Y%m%d}~{today:%Y%m%d}"
 
 
-def _current_ids(entries: list[dict], limit: int | None = None) -> list[str]:
-    ids = []
+def _current_msts(entries: list[dict], limit: int | None = None) -> list[str]:
+    msts = []
     seen = set()
     for entry in entries:
-        ordinance_id = str(entry.get("자치법규ID", ""))
-        if ordinance_id and ordinance_id not in seen:
-            seen.add(ordinance_id)
-            ids.append(ordinance_id)
-    return ids[:limit] if limit is not None else ids
+        mst = str(entry.get("자치법규일련번호", ""))
+        if mst and mst not in seen:
+            seen.add(mst)
+            msts.append(mst)
+    return msts[:limit] if limit is not None else msts
 
 
-def _committed_ids(repo: Path) -> set[str]:
+def _committed_msts(repo: Path) -> set[str]:
     if not (repo / ".git").exists():
         return set()
     result = subprocess.run(
@@ -41,7 +41,7 @@ def _committed_ids(repo: Path) -> set[str]:
     )
     if result.returncode != 0:
         return set()
-    prefix = "자치법규ID: "
+    prefix = "자치법규일련번호: "
     return {
         line[len(prefix):].strip()
         for line in result.stdout.splitlines()
@@ -63,16 +63,16 @@ def run(
     date_range = _date_range(days)
     logger.info("searching ordinances in date range %s", date_range)
     entries = fetch_all_current(types, org=org, sborg=sborg, max_entries=limit, date_range=date_range)
-    current_ids = _current_ids(entries, limit)
-    committed_ids = _committed_ids(repo) if commit else set()
-    import_ids = [ordinance_id for ordinance_id in current_ids if ordinance_id not in committed_ids] if commit else current_ids
+    current_msts = _current_msts(entries, limit)
+    committed_msts = _committed_msts(repo) if commit else set()
+    import_msts = [mst for mst in current_msts if mst not in committed_msts] if commit else current_msts
     fetch_counter = fetch_details(entries, workers=workers, limit=limit)
     cached, fetched, fetch_errors = fetch_counter.snapshot()
     import_stats = import_from_cache(
         repo,
         limit=None,
         commit=commit,
-        ids=import_ids,
+        msts=import_msts,
         skip_dedup=commit,
     )
     stats = {
