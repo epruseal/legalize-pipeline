@@ -103,10 +103,11 @@ class NoResultError(RuntimeError):
         self.message = message
 
 
-def get_precedent_detail(prec_id: str | int) -> bytes:
+def get_precedent_detail(prec_id: str | int, *, refresh: bool = False) -> bytes:
     """Fetch raw precedent detail XML by ID.
 
-    Checks cache first. Fetches from API if not cached, validates that the
+    Checks cache first unless ``refresh`` is true. Fetches from API if not cached,
+    validates that the
     response root tag is ``PrecService``, stores to cache, and returns raw
     XML bytes. Raises :class:`NoResultError` for the "no matching precedent"
     error response so the caller can record the ID in the negative cache
@@ -115,7 +116,7 @@ def get_precedent_detail(prec_id: str | int) -> bytes:
     prec_id = str(prec_id)
 
     cached = cache.get_detail(prec_id)
-    if cached:
+    if cached and not refresh:
         logger.debug(f"Cache hit: detail prec_id={prec_id}")
         return cached
 

@@ -14,6 +14,7 @@
 | `git_engine.py` | Git 커밋 (공포일자 기반 날짜 설정) |
 | `fetch_cache.py` | API → 캐시 병렬 수집 |
 | `import_laws.py` | 전체 법령 import (API/캐시/CSV 모드) |
+| `audit_cache_vs_repo.py` | 캐시와 결과 저장소의 본문 누락/경로 drift 감사 |
 | `update.py` | 증분 업데이트 (최근 N일) |
 | `rebuild.py` | Git 히스토리 재구성 (시간순 커밋) |
 | `generate_metadata.py` | metadata.json, stats.json 생성 |
@@ -63,6 +64,25 @@ python -m laws.import_laws --from-cache
 
 # 미리보기
 python -m laws.import_laws --from-cache --dry-run
+
+# 특정 MST만 backfill
+python -m laws.import_laws --from-cache --msts-list /path/to/msts.txt
+```
+
+### 캐시/저장소 감사
+
+```bash
+# .cache/history + .cache/detail 기준으로 결과 저장소 누락 확인
+python -m laws.audit_cache_vs_repo
+
+# 실제 본문 누락이 있으면 실패
+python -m laws.audit_cache_vs_repo --fail-on-missing-content
+
+# 기존 baseline에 없는 새 경로 drift가 있으면 실패
+python -m laws.audit_cache_vs_repo --fail-on-new-path-drift
+
+# 상세 JSON 출력
+python -m laws.audit_cache_vs_repo --json
 ```
 
 ### 증분 업데이트 (일일 실행)
@@ -73,6 +93,10 @@ python -m laws.update
 
 # 최근 30일
 python -m laws.update --days 30
+
+# history refresh 중 발견한 window 밖 누락 MST는 기본적으로 backfill
+# 문제 분석 시에만 비활성화
+python -m laws.update --no-backfill-discovered-history
 ```
 
 ### Git 히스토리 재구성
@@ -130,7 +154,9 @@ WORKSPACE_ROOT/
 
 ### 정렬 키와 canonical 경로 선택 (compiler와의 동작 일치)
 
-서로 다른 `법령ID`가 같은 structural path를 공유할 때, **먼저 커밋되는 쪽이 canonical(`법률.md`)**이 되고 늦게 오는 쪽이 qualified(`법률(법률).md`)가 됩니다 (first-write-wins in `PathRegistry`). 따라서 ingestion 순서 자체가 canonical 선택의 tiebreaker입니다.
+전체 캐시 import/rebuild와 Rust compiler는 먼저 같은 `법령ID`의 개정 이력을 묶고, 각 lineage의 **최신 개정 법령명**으로 최종 경로를 계획합니다. 그래서 `송유관사업법` → `송유관 안전관리법`처럼 법령명이 바뀐 경우에도 최종 저장소에는 최신명 경로(`kr/송유관안전관리법/법률.md`)가 남습니다.
+
+서로 다른 `법령ID`가 같은 최신 structural path를 공유할 때만, 먼저 계획되는 lineage가 canonical(`법률.md`)이 되고 늦게 오는 lineage가 qualified(`법률(법률).md`)가 됩니다. Streaming helper인 `get_law_path()` 자체는 여전히 first-write-wins 동작을 유지하므로, 전체 입력을 알고 있는 경로에서는 `plan_current_law_paths()`를 먼저 사용해야 합니다.
 
 이 파이프라인과 Rust 재구현(`legalize-kr/compiler`)은 동일한 4-튜플 정렬 키를 사용합니다:
 
@@ -139,7 +165,7 @@ WORKSPACE_ROOT/
 3. `공포번호` (numeric)
 4. `법령MST` (numeric)
 
-공통 헬퍼는 `laws.converter.entry_sort_key`에 있으며, 정렬이 일어나는 모든 호출 지점(`rebuild.py`, `import_laws.py`의 API/cache/CSV 모드, `update.py`)에서 같은 키를 사용합니다. Rust 쪽은 `compiler/src/main.rs`의 `plan_and_diagnose`에 동일 순서가 구현돼 있으며, 한쪽을 바꾸면 양쪽이 갈라져 canonical 파일이 뒤집힙니다.
+공통 헬퍼는 `laws.converter.entry_sort_key`에 있으며, 정렬이 일어나는 호출 지점(`rebuild.py`, `import_laws.py` cache 모드, `update.py`)에서 같은 키를 사용합니다. Rust 쪽은 `compiler/src/main.rs`의 `plan_and_diagnose`에 동일 순서가 구현돼 있으며, 한쪽을 바꾸면 양쪽이 갈라져 canonical 파일이 뒤집힙니다.
 
 ### 부처명 변경과 파편화 방지
 

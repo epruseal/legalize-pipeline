@@ -154,6 +154,55 @@ def get_law_path(law_name: str, law_type: str, law_id: str = "") -> str:
     return qualified
 
 
+def _lineage_key(mst: str, metadata: dict) -> str:
+    """Return the stable key used to group revisions of the same law."""
+
+    law_id = metadata.get("법령ID", "")
+    return f"id:{law_id}" if law_id else f"mst:{mst}"
+
+
+def plan_current_law_paths(entries: list[tuple[str, dict]]) -> dict[str, str]:
+    """Plan output paths so each 법령ID lineage uses its latest law title.
+
+    ``get_law_path`` intentionally keeps first-write-wins behavior for streaming
+    imports. Full-cache rebuilds have the whole lineage available, so they can
+    register each 법령ID once using the latest revision and avoid stale final
+    paths after title renames.
+    """
+
+    latest_by_lineage: dict[str, tuple[tuple[str, str, int, int], dict]] = {}
+    lineage_order: list[str] = []
+
+    for mst, detail in entries:
+        metadata = detail["metadata"]
+        lineage = _lineage_key(mst, metadata)
+        if lineage not in latest_by_lineage:
+            lineage_order.append(lineage)
+        sort_key = entry_sort_key(
+            metadata.get("공포일자", ""),
+            metadata.get("법령명한글", ""),
+            metadata.get("공포번호", ""),
+            mst,
+        )
+        if lineage not in latest_by_lineage or sort_key > latest_by_lineage[lineage][0]:
+            latest_by_lineage[lineage] = (sort_key, metadata)
+
+    reset_path_registry()
+    path_by_lineage: dict[str, str] = {}
+    for lineage in lineage_order:
+        _, metadata = latest_by_lineage[lineage]
+        path_by_lineage[lineage] = get_law_path(
+            metadata.get("법령명한글", ""),
+            metadata.get("법령구분", ""),
+            metadata.get("법령ID", ""),
+        )
+
+    return {
+        mst: path_by_lineage[_lineage_key(mst, detail["metadata"])]
+        for mst, detail in entries
+    }
+
+
 def build_frontmatter(metadata: dict, attachments: list[dict] | None = None) -> dict:
     """Build YAML frontmatter dict from metadata."""
     raw_name = metadata.get("법령명한글", "")

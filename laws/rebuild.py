@@ -19,7 +19,7 @@ from .converter import (
     format_date,
     get_law_path,
     law_to_markdown,
-    reset_path_registry,
+    plan_current_law_paths,
 )
 from .git_engine import _run_git
 from core.git_engine import historical_commit_env
@@ -122,7 +122,7 @@ def load_and_sort_entries() -> list[tuple[str, dict]]:
         logger.warning(f"{errors} entries failed to parse")
 
     # Sort by (공포일자, 법령명, 공포번호, MST) to match compiler/src/main.rs.
-    # First-write-wins in PathRegistry uses this key to pick canonical paths.
+    # Path planning also uses this key to identify the latest title per 법령ID.
     entries.sort(key=lambda x: entry_sort_key(
         x[1]["metadata"].get("공포일자", ""),
         x[1]["metadata"].get("법령명한글", ""),
@@ -135,7 +135,7 @@ def load_and_sort_entries() -> list[tuple[str, dict]]:
 
 def rebuild_law_commits(entries: list[tuple[str, dict]], dry_run: bool = False) -> int:
     """Create one commit per law entry, oldest first."""
-    reset_path_registry()
+    planned_paths = plan_current_law_paths(entries)
     committed = 0
     errors = 0
 
@@ -149,7 +149,7 @@ def rebuild_law_commits(entries: list[tuple[str, dict]], dry_run: bool = False) 
             prom_date = "2000-01-01"
 
         law_id = meta.get("법령ID", "")
-        file_path = get_law_path(law_name, law_type, law_id)
+        file_path = planned_paths.get(mst) or get_law_path(law_name, law_type, law_id)
 
         if dry_run:
             if i <= 5 or i % 500 == 0 or i == len(entries):

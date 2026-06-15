@@ -12,6 +12,7 @@ Usage (from legalize-pipeline root):
 
 import argparse
 import logging
+import subprocess
 from datetime import datetime, timedelta
 
 import yaml
@@ -28,6 +29,7 @@ from .converter import (
     reset_path_registry,
 )
 from .git_engine import commit_law
+from core.git_engine import commit_exists
 from .import_laws import build_commit_msg
 
 logger = logging.getLogger(__name__)
@@ -92,12 +94,81 @@ def _find_existing_path_for_law_id(law_name: str, law_type: str, law_id: str) ->
     return None
 
 
+def _current_law_path(law_name: str, law_type: str, law_id: str) -> str:
+    """Return the natural current-name path, avoiding different-ID collisions."""
+
+    group, filename = get_group_and_filename(law_name, law_type)
+    path = f"kr/{group}/{filename}.md"
+    abs_path = KR_DIR.parent / path
+    if abs_path.exists():
+        existing_id = _markdown_law_id(abs_path)
+        if existing_id and existing_id != str(law_id):
+            return f"kr/{group}/{filename}({law_type}).md"
+        if existing_id is None and law_id:
+            return f"kr/{group}/{filename}({law_type}).md"
+    return path
+
+
+def _resolve_write_path_for_law(
+    law_name: str,
+    law_type: str,
+    law_id: str,
+    *,
+    dry_run: bool = False,
+) -> tuple[str, list[str]]:
+    """Return write path and extra paths needed to commit path migration.
+
+    Existing same-ID files are moved to the current-name path instead of
+    preserving stale title/ministry paths. This prevents future path drift
+    like 법률 files remaining under a pre-rename directory while 시행령 and
+    시행규칙 are written under the current directory.
+    """
+
+    if not law_id:
+        return get_law_path(law_name, law_type, law_id), []
+
+    existing_path = _find_existing_path_for_law_id(law_name, law_type, law_id)
+    current_path = _current_law_path(law_name, law_type, law_id)
+    if not existing_path or existing_path == current_path:
+        return current_path, []
+
+    old_abs = KR_DIR.parent / existing_path
+    new_abs = KR_DIR.parent / current_path
+    logger.info("Moving law_id=%s path: %s -> %s", law_id, existing_path, current_path)
+    if not dry_run:
+        new_abs.parent.mkdir(parents=True, exist_ok=True)
+        if new_abs.exists():
+            subprocess.run(
+                ["git", "rm", "--force", existing_path],
+                cwd=KR_DIR.parent,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        else:
+            subprocess.run(
+                ["git", "mv", "-f", existing_path, current_path],
+                cwd=KR_DIR.parent,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+    elif old_abs.exists():
+        logger.info("[DRY-RUN] would move %s -> %s", existing_path, current_path)
+    return current_path, [existing_path]
+
+
+def _commit_exists_for_mst(mst: str) -> bool:
+    return commit_exists(KR_DIR.parent, f"법령MST: {mst}")
+
+
 def update(
     days: int = 14,
     law_type_filter: str | None = None,
     dry_run: bool = False,
     max_pages: int = 50,
     augment_history: bool = True,
+    backfill_discovered_history: bool = True,
 ) -> int:
     """Query API for recently amended laws and import their latest versions."""
     if not LAW_API_KEY:
@@ -135,11 +206,14 @@ def update(
     # lsHistory augmentation: lawSearch.do omits 타법개정 MSTs (whose 제개정구분 is
     # empty on the server), so for each law surfaced by the search, refresh its
     # amendment history from lsHistory and pick up any sibling MSTs that fall in
-    # the [since, today] window. Without this, 타법개정 공포분은 영원히 누락된다.
+    # the [since, today] window. When a newly surfaced law reveals older history
+    # whose commit is absent, backfill those MSTs too; otherwise window-bounded
+    # daily updates can permanently miss historical entries discovered late.
     if augment_history:
         seen_msts = {law.get("법령일련번호", "") for law in all_laws}
         unique_names = {law.get("법령명한글", "") for law in all_laws if law.get("법령명한글")}
         added = 0
+        backfilled = 0
         history_errors = 0
         for name in sorted(unique_names):
             try:
@@ -153,7 +227,13 @@ def update(
                 prom = entry.get("공포일자", "")
                 if not mst or mst in seen_msts:
                     continue
-                if not (since <= prom <= today):
+                in_window = since <= prom <= today
+                backfill_missing = (
+                    backfill_discovered_history
+                    and not in_window
+                    and not _commit_exists_for_mst(mst)
+                )
+                if not in_window and not backfill_missing:
                     continue
                 all_laws.append({
                     "법령일련번호": mst,
@@ -164,9 +244,13 @@ def update(
                     "시행일자": entry.get("시행일자", ""),
                 })
                 seen_msts.add(mst)
-                added += 1
+                if backfill_missing:
+                    backfilled += 1
+                else:
+                    added += 1
         logger.info(
-            f"lsHistory augmentation: +{added} MSTs from {len(unique_names)} laws "
+            f"lsHistory augmentation: +{added} window MSTs, +{backfilled} backfill MSTs "
+            f"from {len(unique_names)} laws "
             f"(errors={history_errors})"
         )
 
@@ -201,11 +285,12 @@ def update(
 
             fetched_name = meta.get("법령명한글", name)
             law_id = meta.get("법령ID", "")
-            existing_path = _find_existing_path_for_law_id(fetched_name, law_type, law_id)
-            if existing_path:
-                file_path = existing_path
-            else:
-                file_path = get_law_path(fetched_name, law_type, law_id)
+            file_path, extra_commit_paths = _resolve_write_path_for_law(
+                fetched_name,
+                law_type,
+                law_id,
+                dry_run=dry_run,
+            )
             abs_path = KR_DIR.parent / file_path
 
             meta["제개정구분"] = law.get("제개정구분명", meta.get("제개정구분", ""))
@@ -226,7 +311,14 @@ def update(
             if not prom_date or len(prom_date) != 10:
                 prom_date = "2000-01-01"
 
-            result = commit_law(file_path, commit_msg, prom_date, mst, skip_dedup=False)
+            result = commit_law(
+                file_path,
+                commit_msg,
+                prom_date,
+                mst,
+                skip_dedup=False,
+                extra_paths=extra_commit_paths,
+            )
             if result:
                 mark_processed(mst)
                 committed += 1
@@ -285,6 +377,14 @@ def main():
             "missed by lawSearch.do. Only use when troubleshooting — default on."
         ),
     )
+    parser.add_argument(
+        "--no-backfill-discovered-history",
+        action="store_true",
+        help=(
+            "Do not import older missing MSTs discovered while refreshing histories "
+            "for laws in the update window. Default on to prevent historical gaps."
+        ),
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -295,6 +395,7 @@ def main():
         dry_run=args.dry_run,
         max_pages=args.max_pages,
         augment_history=not args.no_augment_history,
+        backfill_discovered_history=not args.no_backfill_discovered_history,
     )
 
     if not args.dry_run:

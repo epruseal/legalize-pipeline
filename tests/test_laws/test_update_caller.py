@@ -69,6 +69,87 @@ def test_find_existing_path_for_law_id_across_renamed_group(tmp_path, monkeypatc
     assert found == "kr/헌법재판소참고인비용지급에관한규칙/헌법재판소규칙.md"
 
 
+def test_resolve_write_path_moves_existing_file_to_current_group(tmp_path, monkeypatch):
+    import laws.update as update_mod
+    import laws.converter as conv
+
+    repo = tmp_path / "repo"
+    kr_dir = repo / "kr"
+    kr_dir.mkdir(parents=True)
+    monkeypatch.setattr(update_mod, "KR_DIR", kr_dir)
+    monkeypatch.setattr(conv, "KR_DIR", kr_dir, raising=False)
+
+    old_dir = kr_dir / "송유관사업법"
+    old_dir.mkdir()
+    old_file = old_dir / "법률.md"
+    old_file.write_text(
+        "---\n법령ID: '000289'\n법령MST: 283975\n---\n# 송유관 안전관리법\n",
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    def subprocess_run_stub(args, **kwargs):
+        calls.append((args, kwargs))
+
+        class Result:
+            returncode = 0
+
+        return Result()
+
+    monkeypatch.setattr(update_mod.subprocess, "run", subprocess_run_stub)
+
+    path, extra_paths = update_mod._resolve_write_path_for_law(
+        "송유관 안전관리법",
+        "법률",
+        "000289",
+    )
+
+    assert path == "kr/송유관안전관리법/법률.md"
+    assert extra_paths == ["kr/송유관사업법/법률.md"]
+    assert calls[0][0] == [
+        "git",
+        "mv",
+        "-f",
+        "kr/송유관사업법/법률.md",
+        "kr/송유관안전관리법/법률.md",
+    ]
+    assert calls[0][1]["cwd"] == repo
+
+
+def test_resolve_write_path_uses_qualified_current_path_on_collision(tmp_path, monkeypatch):
+    import laws.update as update_mod
+    import laws.converter as conv
+
+    repo = tmp_path / "repo"
+    kr_dir = repo / "kr"
+    kr_dir.mkdir(parents=True)
+    monkeypatch.setattr(update_mod, "KR_DIR", kr_dir)
+    monkeypatch.setattr(conv, "KR_DIR", kr_dir, raising=False)
+
+    current_dir = kr_dir / "충돌법"
+    current_dir.mkdir()
+    (current_dir / "법률.md").write_text(
+        "---\n법령ID: 'DIFFERENT'\n법령MST: 1\n---\n# 충돌법\n",
+        encoding="utf-8",
+    )
+    old_dir = kr_dir / "과거충돌법"
+    old_dir.mkdir()
+    (old_dir / "법률.md").write_text(
+        "---\n법령ID: 'SAME'\n법령MST: 2\n---\n# 충돌법\n",
+        encoding="utf-8",
+    )
+
+    calls = []
+    monkeypatch.setattr(update_mod.subprocess, "run", lambda args, **kwargs: calls.append((args, kwargs)))
+
+    path, extra_paths = update_mod._resolve_write_path_for_law("충돌법", "법률", "SAME")
+
+    assert path == "kr/충돌법/법률(법률).md"
+    assert extra_paths == ["kr/과거충돌법/법률.md"]
+    assert calls[0][0][-2:] == ["kr/과거충돌법/법률.md", "kr/충돌법/법률(법률).md"]
+
+
 def test_find_existing_path_no_match_returns_none(tmp_path, monkeypatch):
     import laws.update as update_mod
     import laws.converter as conv
@@ -224,3 +305,73 @@ def test_update_uses_git_dedup_instead_of_checkpoint_filter(tmp_path, monkeypatc
     assert update_mod.update(days=1, dry_run=False) == 1
     assert calls
     assert calls[0][1]["skip_dedup"] is False
+
+
+def test_update_backfills_older_history_discovered_from_current_law(tmp_path, monkeypatch):
+    import laws.update as update_mod
+    import laws.converter as conv
+    import laws.cache as law_cache
+
+    kr_dir = tmp_path / "kr"
+    kr_dir.mkdir()
+    monkeypatch.setattr(update_mod, "KR_DIR", kr_dir)
+    monkeypatch.setattr(update_mod, "LAW_API_KEY", "test-key")
+    monkeypatch.setattr(conv, "KR_DIR", kr_dir, raising=False)
+    monkeypatch.setattr(law_cache, "CACHE_DIR", tmp_path / ".cache")
+
+    monkeypatch.setattr(update_mod, "search_laws", lambda **kw: {
+        "laws": [{
+            "법령일련번호": "286195",
+            "법령명한글": "사우디아라비아산 부틸글리콜에테르에 대한 덤핑방지관세 부과에 관한 규칙",
+            "공포일자": "20260515",
+            "공포번호": "31",
+        }],
+        "totalCnt": 1,
+    })
+    monkeypatch.setattr(update_mod, "get_law_history", lambda name, refresh=False: [
+        {
+            "법령일련번호": "244531",
+            "법령명한글": name,
+            "제개정구분명": "제정",
+            "공포일자": "20220905",
+            "공포번호": "932",
+            "시행일자": "20220905",
+        },
+        {
+            "법령일련번호": "286195",
+            "법령명한글": name,
+            "제개정구분명": "제정",
+            "공포일자": "20260515",
+            "공포번호": "31",
+            "시행일자": "20260515",
+        },
+    ])
+    detail_calls = []
+
+    def detail_stub(mst):
+        detail_calls.append(mst)
+        return {
+            "metadata": {
+                "법령명한글": f"법{mst}",
+                "법령MST": mst,
+                "법령ID": mst,
+                "법령구분": "기획재정부령",
+                "공포일자": "20220905" if mst == "244531" else "20260515",
+                "공포번호": "1",
+            },
+            "articles": [{"조문번호": "1"}],
+        }
+
+    monkeypatch.setattr(update_mod, "get_law_detail", detail_stub)
+    monkeypatch.setattr(update_mod, "_commit_exists_for_mst", lambda mst: mst == "286195")
+    monkeypatch.setattr(update_mod, "law_to_markdown", lambda detail: "# 법\n\n본문")
+    monkeypatch.setattr(update_mod, "reset_path_registry", lambda: None)
+    monkeypatch.setattr(update_mod, "get_last_update", lambda: "2026-05-01")
+    monkeypatch.setattr(update_mod, "get_processed_msts", lambda: set())
+    monkeypatch.setattr(update_mod, "mark_processed", lambda mst: None)
+    monkeypatch.setattr(update_mod, "set_last_update", lambda d: None)
+    monkeypatch.setattr(update_mod, "commit_law", lambda *args, **kwargs: False)
+
+    update_mod.update(days=14, dry_run=True)
+
+    assert detail_calls == ["244531", "286195"]

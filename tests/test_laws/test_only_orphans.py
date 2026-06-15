@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import laws.failures as failures
-from laws.import_laws import _run_search_api_recovery, import_from_cache
+from laws.import_laws import _read_msts_filter, _run_search_api_recovery, import_from_cache
 
 
 @pytest.fixture(autouse=True)
@@ -78,6 +78,36 @@ def test_orphans_excludes_all_three_sets(monkeypatch, tmp_path):
 
     called_msts = {call.args[0] for call in detail_mock.call_args_list}
     assert called_msts == {"4"}
+
+
+def test_msts_filter_limits_cache_import(monkeypatch):
+    monkeypatch.setattr("laws.import_laws.cache.list_cached_msts", lambda: ["1", "2", "3"])
+    monkeypatch.setattr("laws.import_laws.get_processed_msts", lambda: set())
+
+    detail_mock = MagicMock(side_effect=Exception("no detail"))
+    with patch("laws.import_laws.get_law_detail", detail_mock):
+        import_from_cache(msts_filter={"2"}, dry_run=True)
+
+    called_msts = {call.args[0] for call in detail_mock.call_args_list}
+    assert called_msts == {"2"}
+
+
+def test_read_msts_filter_ignores_blank_lines_and_comments(tmp_path):
+    list_file = tmp_path / "msts.txt"
+    list_file.write_text(
+        "\n".join(
+            [
+                "# full-line comment",
+                "  244531  ",
+                "",
+                "    # indented comment",
+                "286195",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert _read_msts_filter(list_file) == {"244531", "286195"}
 
 
 # ---------------------------------------------------------------------------
