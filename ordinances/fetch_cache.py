@@ -191,7 +191,6 @@ def _fetch_detail_task(mst: str, ordinance_id: str, counter: Counter) -> None:
     try:
         get_ordinance_detail(ordinance_id, mst=mst)
         record_requests(1, corpus="ordinances")
-        checkpoint.mark_detail_processed(mst)
         counter.inc("fetched")
     except Exception:
         logger.exception("Failed ordinance detail MST=%s ID=%s", mst, ordinance_id)

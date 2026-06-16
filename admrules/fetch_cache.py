@@ -163,7 +163,6 @@ def _fetch_detail_task(serial_no: str, counter: Counter) -> None:
     try:
         get_admrule_detail(serial_no)
         record_requests(1, corpus="admrules")
-        checkpoint.mark_detail_processed(serial_no)
         counter.inc("fetched")
     except Exception:
         logger.exception("Failed admrule detail ID=%s", serial_no)
