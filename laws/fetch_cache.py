@@ -29,30 +29,9 @@ from core.counter import Counter
 logger = logging.getLogger(__name__)
 
 
-def _load_history_seed_names(path: Path | None) -> list[str]:
-    """Load extra law names whose histories should be fetched explicitly."""
-
-    if path is None:
-        return []
-    names: list[str] = []
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        name = raw.strip()
-        if not name or name.startswith("#"):
-            continue
-        names.append(name)
-    return names
-
-
-def _extend_unique_names(names: list[str], extra_names: list[str]) -> list[str]:
-    """Append extra names while preserving order and existing deduplication."""
-
-    seen = set(names)
-    result = list(names)
-    for name in extra_names:
-        if name and name not in seen:
-            seen.add(name)
-            result.append(name)
-    return result
+def _exit_if_errors(phase: str, errors: int) -> None:
+    if errors:
+        raise SystemExit(f"{phase} failed: errors={errors}")
 
 
 def fetch_all_msts() -> list[dict]:
@@ -158,6 +137,47 @@ def _assert_no_empty_history_cache() -> None:
         raise RuntimeError("History cache invariant violated: " + "; ".join(problems))
 
 
+def _load_history_name_file(path: Path) -> list[str]:
+    """Load explicit law-name seeds from a newline-delimited text file."""
+
+    names: list[str] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        name = line.strip()
+        if not name or name.startswith("#"):
+            continue
+        names.append(name)
+    return names
+
+
+def _history_names_from_laws(
+    laws: list[dict],
+    *,
+    history_name_files: list[Path],
+    limit: int | None,
+) -> list[str]:
+    """Return deduplicated history seed names from current laws plus explicit files."""
+
+    seen_names: set[str] = set()
+    unique_names: list[str] = []
+    for law in laws:
+        name = law.get("법령명한글", "")
+        if name and name not in seen_names:
+            seen_names.add(name)
+            unique_names.append(name)
+
+    if limit:
+        unique_names = unique_names[:limit]
+        seen_names = set(unique_names)
+
+    for path in history_name_files:
+        for name in _load_history_name_file(path):
+            if name not in seen_names:
+                seen_names.add(name)
+                unique_names.append(name)
+
+    return unique_names
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Fetch and cache law detail responses and amendment histories"
@@ -180,9 +200,12 @@ def main():
     parser.add_argument(
         "--history-name-file",
         type=Path,
+        action="append",
+        default=[],
         help=(
-            "Text file with additional law names to use as explicit lsHistory "
-            "seeds, one name per line. Blank lines and # comments are ignored."
+            "Read additional law names from a newline-delimited file and use "
+            "them as explicit lsHistory seeds. Blank lines and lines starting "
+            "with '#' are ignored."
         ),
     )
     parser.add_argument(
@@ -242,29 +265,14 @@ def main():
 
         c, f, e = counter.snapshot()
         logger.info(f"Detail fetch done: cached={c}, fetched={f}, errors={e}")
+        _exit_if_errors("law detail fetch", e)
         return
 
-    # Deduplicate by 법령명한글
-    seen_names: set[str] = set()
-    unique_names: list[str] = []
-    for law in all_laws:
-        name = law.get("법령명한글", "")
-        if name and name not in seen_names:
-            seen_names.add(name)
-            unique_names.append(name)
-
-    if args.limit:
-        unique_names = unique_names[:args.limit]
-
-    seed_names = _load_history_seed_names(args.history_name_file)
-    if seed_names:
-        before = len(unique_names)
-        unique_names = _extend_unique_names(unique_names, seed_names)
-        logger.info(
-            "Added %s explicit history seed names (%s new)",
-            len(seed_names),
-            len(unique_names) - before,
-        )
+    unique_names = _history_names_from_laws(
+        all_laws,
+        history_name_files=args.history_name_file,
+        limit=args.limit,
+    )
 
     # Step 1: Fetch history concurrently
     logger.info(f"Fetching history for {len(unique_names)} unique law names (workers={workers})...")
@@ -296,6 +304,7 @@ def main():
 
     c, f, e = history_counter.snapshot()
     logger.info(f"History fetch done: cached={c}, fetched={f}, errors={e}, total_msts={len(all_msts)}")
+    _exit_if_errors("law history fetch", e)
 
     _assert_no_empty_history_cache()
 
@@ -321,6 +330,7 @@ def main():
 
     c, f, e = detail_counter.snapshot()
     logger.info(f"Detail fetch done: cached={c}, fetched={f}, errors={e}")
+    _exit_if_errors("law detail fetch", e)
 
 
 if __name__ == "__main__":

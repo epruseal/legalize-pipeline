@@ -8,7 +8,7 @@ import responses as responses_lib
 import precedents.cache as prec_cache
 import precedents.api_client as prec_api
 
-LAW_API_BASE = "http://www.law.go.kr/DRF"
+LAW_API_BASE = "https://www.law.go.kr/DRF"
 FIXTURES_DIR = Path(__file__).parent.parent / "fixtures"
 
 

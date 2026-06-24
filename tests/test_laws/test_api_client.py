@@ -9,7 +9,7 @@ import responses as responses_lib
 import laws.cache as law_cache
 import laws.api_client as api_client
 
-LAW_API_BASE = "http://www.law.go.kr/DRF"
+LAW_API_BASE = "https://www.law.go.kr/DRF"
 FIXTURES_DIR = Path(__file__).parent.parent / "fixtures"
 
 
@@ -45,6 +45,19 @@ def test_search_laws_empty():
     result = api_client.search_laws()
     assert result["totalCnt"] == 0
     assert result["laws"] == []
+
+
+@responses_lib.activate
+def test_search_laws_raises_on_api_error_response():
+    xml = """<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <result>사용자 정보 검증에 실패하였습니다.</result>
+  <msg>등록된 서버에서 호출해 주세요.</msg>
+</Response>""".encode()
+    responses_lib.add(responses_lib.GET, f"{LAW_API_BASE}/lawSearch.do", body=xml, status=200)
+
+    with pytest.raises(RuntimeError, match="사용자 정보 검증"):
+        api_client.search_laws(query="민법")
 
 
 @responses_lib.activate
@@ -144,6 +157,29 @@ def test_parse_dot_date():
     assert api_client._parse_dot_date("") == ""
 
 
+def _history_row(
+    mst: str,
+    name: str,
+    *,
+    amendment: str = "제정",
+    law_type: str = "대통령령",
+    prom_date: str = "2004.7.24",
+) -> str:
+    return (
+        "<tr>"
+        "<td>1</td>"
+        f'<td><a href="/lsInfoP.do?MST={mst}">{name}</a></td>'
+        "<td>교육부</td>"
+        f"<td>{amendment}</td>"
+        f"<td>{law_type}</td>"
+        "<td>제 18455호</td>"
+        f"<td>{prom_date}</td>"
+        f"<td>{prom_date}</td>"
+        "<td></td>"
+        "</tr>"
+    )
+
+
 @responses_lib.activate
 def test_get_law_history_pagination():
     html = (FIXTURES_DIR / "history_response.html").read_bytes()
@@ -163,44 +199,43 @@ def test_get_law_history_pagination():
 
 
 @responses_lib.activate
-def test_get_law_history_matches_full_name_after_removing_spaces():
-    target = "국립사범대학 졸업자 중 교원미임용자 임용 등에 관한 특별법 시행령"
-    old_spelling = "국립사범대학졸업자중교원미임용자임용등에관한특별법시행령"
-    other_name = "국립사범대학졸업자중교원미임용자임용등에관한특별법"
-    html = f"""<html><body><table>
-<tr>
-  <td>1</td>
-  <td><a href="/lsInfoP.do?MST=62094">{old_spelling}</a></td>
-  <td>교육부</td>
-  <td>제정</td>
-  <td>대통령령</td>
-  <td>제 18473호</td>
-  <td>2004.7.24</td>
-  <td>2004.7.25</td>
-  <td></td>
-</tr>
-<tr>
-  <td>2</td>
-  <td><a href="/lsInfoP.do?MST=59660">{other_name}</a></td>
-  <td>교육부</td>
-  <td>제정</td>
-  <td>법률</td>
-  <td>제 7068호</td>
-  <td>2004.1.20</td>
-  <td>2004.1.20</td>
-  <td></td>
-</tr>
-</table></body></html>"""
+def test_get_law_history_matches_full_name_ignoring_whitespace_only():
+    current_name = "국립사범대학 졸업자 중 교원미임용자 임용 등에 관한 특별법 시행령"
+    old_name = "국립사범대학졸업자중교원미임용자임용등에관한특별법시행령"
+    other_name = "국립사범대학졸업자중교원미임용자임용등에관한특별법시행규칙"
+    html = (
+        "<html><body><table>"
+        + _history_row("62094", old_name)
+        + _history_row("62095", other_name)
+        + "</table></body></html>"
+    )
     responses_lib.add(
         responses_lib.GET, f"{LAW_API_BASE}/lawSearch.do",
         body=html, status=200,
         content_type="text/html; charset=utf-8",
     )
 
-    history = api_client.get_law_history(target)
+    history = api_client.get_law_history(current_name)
 
     assert [entry["법령일련번호"] for entry in history] == ["62094"]
-    assert history[0]["법령명한글"] == old_spelling
+    assert history[0]["법령명한글"] == old_name
+
+
+@responses_lib.activate
+def test_get_law_history_raises_on_api_error_response():
+    xml = """<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <result>사용자 정보 검증에 실패하였습니다.</result>
+  <msg>등록된 서버에서 호출해 주세요.</msg>
+</Response>"""
+    responses_lib.add(
+        responses_lib.GET, f"{LAW_API_BASE}/lawSearch.do",
+        body=xml, status=200,
+        content_type="text/html; charset=utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="사용자 정보 검증"):
+        api_client.get_law_history("민법", refresh=True)
 
 
 @responses_lib.activate

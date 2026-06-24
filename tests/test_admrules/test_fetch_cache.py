@@ -1,6 +1,11 @@
 """Tests for admrules/fetch_cache.py."""
 
+import sys
+
+import pytest
+
 from admrules import fetch_cache
+from core.counter import Counter
 
 
 def test_fetch_all_current_pages_until_total(monkeypatch):
@@ -73,3 +78,15 @@ def test_fetch_details_deduplicates_and_limits(monkeypatch):
     )
     assert fetched == ["1"]
     assert counter.snapshot() == (0, 1, 0)
+
+
+def test_main_exits_when_detail_fetch_has_errors(monkeypatch):
+    counter = Counter()
+    counter.inc("errors")
+
+    monkeypatch.setattr(sys, "argv", ["admrules.fetch_cache", "--skip-quota-check"])
+    monkeypatch.setattr(fetch_cache, "fetch_all_current", lambda knd_values=None, org="", max_entries=None: [])
+    monkeypatch.setattr(fetch_cache, "fetch_details", lambda entries, workers, limit: counter)
+
+    with pytest.raises(SystemExit, match="admrule detail fetch failed: errors=1"):
+        fetch_cache.main()

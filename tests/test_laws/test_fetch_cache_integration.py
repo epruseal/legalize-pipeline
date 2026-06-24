@@ -6,6 +6,7 @@ pagination bug silently dropped), and verifies the end-to-end history-fetch
 stage rewrites the cache and passes the post-fetch invariant.
 """
 
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -16,7 +17,7 @@ import laws.api_client as api_client
 import laws.cache as law_cache
 import laws.fetch_cache as fetch_cache
 
-LAW_API_BASE = "http://www.law.go.kr/DRF"
+LAW_API_BASE = "https://www.law.go.kr/DRF"
 
 
 @pytest.fixture(autouse=True)
@@ -51,23 +52,49 @@ def _page(rows: list[str]) -> str:
     return "<html><body><table>" + "".join(rows) + "</table></body></html>"
 
 
-def test_history_name_file_adds_seed_not_in_current_search_list(tmp_path: Path):
+def test_history_name_file_adds_explicit_seed_after_limited_search(tmp_path: Path):
     seed_file = tmp_path / "history_seed_names.txt"
     seed_file.write_text(
-        "# 폐지 법령 seed\n"
-        "\n"
-        "국립사범대학 졸업자 중 교원미임용자 임용 등에 관한 특별법\n"
-        "주택법\n",
+        "\n".join([
+            "# issue-specific backfill seeds",
+            "",
+            "폐지본법",
+            "현행법",
+        ]),
         encoding="utf-8",
     )
-
-    seed_names = fetch_cache._load_history_seed_names(seed_file)
-    unique_names = fetch_cache._extend_unique_names(["주택법"], seed_names)
-
-    assert unique_names == [
-        "주택법",
-        "국립사범대학 졸업자 중 교원미임용자 임용 등에 관한 특별법",
+    laws = [
+        {"법령명한글": "현행법"},
+        {"법령명한글": "다른현행법"},
     ]
+
+    names = fetch_cache._history_names_from_laws(
+        laws,
+        history_name_files=[seed_file],
+        limit=1,
+    )
+
+    assert names == ["현행법", "폐지본법"]
+
+
+def test_main_exits_when_skip_history_detail_fetch_has_errors(monkeypatch):
+    import laws.history_allowlist as history_allowlist
+
+    monkeypatch.setattr(sys, "argv", ["laws.fetch_cache", "--skip-history", "--workers", "1"])
+    monkeypatch.setattr(history_allowlist, "load_allowlist", lambda: {})
+    monkeypatch.setattr(
+        fetch_cache,
+        "fetch_all_msts",
+        lambda: [{"법령일련번호": "1", "법령명한글": "실패법"}],
+    )
+    monkeypatch.setattr(
+        fetch_cache,
+        "_fetch_detail_task",
+        lambda mst, name, counter: counter.inc("errors"),
+    )
+
+    with pytest.raises(SystemExit, match="law detail fetch failed: errors=1"):
+        fetch_cache.main()
 
 
 @responses_lib.activate

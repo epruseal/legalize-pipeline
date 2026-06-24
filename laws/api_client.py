@@ -2,6 +2,7 @@
 
 import logging
 import re
+from html import unescape
 from xml.etree import ElementTree
 
 import requests
@@ -20,6 +21,27 @@ from core.throttle import Throttle
 logger = logging.getLogger(__name__)
 
 _throttle = Throttle(REQUEST_DELAY_SECONDS)
+
+
+def _raise_if_api_error(root: ElementTree.Element, context: str) -> None:
+    result = root.findtext("result", "")
+    if result and "실패" in result:
+        message = root.findtext("msg", "")
+        raise RuntimeError(f"API error for {context}: {result} - {message}")
+
+
+def _raise_if_html_api_error(text: str, context: str) -> None:
+    result_match = re.search(r"<result>\s*(.*?)\s*</result>", text, re.DOTALL)
+    if not result_match:
+        return
+    result = unescape(re.sub(r"<[^>]+>", "", result_match.group(1)).strip())
+    if "실패" not in result:
+        return
+    message_match = re.search(r"<msg>\s*(.*?)\s*</msg>", text, re.DOTALL)
+    message = ""
+    if message_match:
+        message = unescape(re.sub(r"<[^>]+>", "", message_match.group(1)).strip())
+    raise RuntimeError(f"API error for {context}: {result} - {message}")
 
 
 def _absolute_law_url(value: str) -> str:
@@ -97,6 +119,7 @@ def search_laws(
 
     resp = _request(f"{LAW_API_BASE}/lawSearch.do", params)
     root = ElementTree.fromstring(resp.content)
+    _raise_if_api_error(root, f"law search query={query!r}")
 
     total = root.findtext("totalCnt", "0")
     page_num = root.findtext("page", "1")
@@ -140,11 +163,7 @@ def get_law_detail(mst_id: str | int) -> dict:
         raw = resp.content
 
     root = ElementTree.fromstring(raw)
-
-    # Check for error response
-    error = root.findtext("result")
-    if error and "실패" in error:
-        raise RuntimeError(f"API error for MST {mst_id}: {error} - {root.findtext('msg', '')}")
+    _raise_if_api_error(root, f"MST {mst_id}")
 
     # Parse metadata
     metadata = {
@@ -238,16 +257,17 @@ def _parse_dot_date(raw: str) -> str:
 
 
 def _normalize_history_law_name(value: str) -> str:
-    """Normalize full law names for lsHistory row matching."""
+    """Normalize law names only for exact lsHistory name matching."""
 
-    return re.sub(r"\s+", "", value.strip())
+    return re.sub(r"\s+", "", value or "")
 
 
 def get_law_history(law_name: str, refresh: bool = False) -> list[dict]:
     """Fetch amendment history for a law via lsHistory HTML endpoint.
 
     Args:
-        law_name: Exact law name (e.g., "민법")
+        law_name: Law name (e.g., "민법"). History rows must match the full name
+            after whitespace normalization.
         refresh: If True, bypass the local history cache and refetch from the API.
             The cache is then rewritten with the fresh result. Use this when the
             upstream may have added new entries (e.g., 타법개정) that the locally
@@ -265,7 +285,6 @@ def get_law_history(law_name: str, refresh: bool = False) -> list[dict]:
             logging.info("rewriting poisoned empty cache for %s", law_name)
 
     all_entries: list[dict] = []
-    normalized_law_name = _normalize_history_law_name(law_name)
     page = 1
 
     while True:
@@ -276,6 +295,7 @@ def get_law_history(law_name: str, refresh: bool = False) -> list[dict]:
             "display": "100",
             "page": str(page),
         })
+        _raise_if_html_api_error(resp.text, f"law history query={law_name!r}")
 
         # Parse table rows: each row has MST in link + td columns
         # Columns: 순번 | 법령명 | 소관부처 | 제개정구분 | 법종구분 | 공포번호 | 공포일자 | 시행일자 | 현행연혁
@@ -290,7 +310,7 @@ def get_law_history(law_name: str, refresh: bool = False) -> list[dict]:
             clean = [re.sub(r"<[^>]+>", "", td).strip() for td in tds]
             # clean: [순번, 법령명, 소관부처, 제개정구분, 법종구분, 공포번호, 공포일자, 시행일자, 현행연혁]
             name = clean[1]
-            if _normalize_history_law_name(name) != normalized_law_name:
+            if _normalize_history_law_name(name) != _normalize_history_law_name(law_name):
                 continue
             prom_date = _parse_dot_date(clean[6])
             enf_date = _parse_dot_date(clean[7])

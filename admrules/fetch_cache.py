@@ -14,6 +14,11 @@ from .config import ADMRULE_TYPES, CONCURRENT_WORKERS
 logger = logging.getLogger(__name__)
 
 
+def _exit_if_errors(errors: int) -> None:
+    if errors:
+        raise SystemExit(f"admrule detail fetch failed: errors={errors}")
+
+
 def _compact_date(value: str) -> str:
     return "".join(ch for ch in str(value) if ch.isdigit())
 
@@ -101,7 +106,9 @@ def main() -> None:
         ensure_headroom(expected_requests=args.limit or 20000, corpus="admrules")
     entries = fetch_all_current(knd_values=args.knd, org=args.org, max_entries=args.limit)
     counter = fetch_details(entries, workers=args.workers, limit=args.limit)
-    logger.info("admrule fetch done: cached=%s fetched=%s errors=%s", *counter.snapshot())
+    cached, fetched, errors = counter.snapshot()
+    logger.info("admrule fetch done: cached=%s fetched=%s errors=%s", cached, fetched, errors)
+    _exit_if_errors(errors)
 
 
 if __name__ == "__main__":

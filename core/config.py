@@ -19,7 +19,7 @@ LEGALIZE_WEB_REPO = Path(os.environ.get("LEGALIZE_WEB_REPO", str(WORKSPACE_ROOT 
 COMPILER_REPO = Path(os.environ.get("COMPILER_REPO", str(WORKSPACE_ROOT / "compiler"))).resolve()
 
 # API
-LAW_API_BASE = "http://www.law.go.kr/DRF"
+LAW_API_BASE = "https://www.law.go.kr/DRF"
 LAW_API_KEY = os.environ.get("LAW_OC", os.environ.get("LAW_API_KEY", ""))
 
 # Rate limiting

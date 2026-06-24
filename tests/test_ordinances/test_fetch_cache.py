@@ -1,6 +1,11 @@
 """Tests for ordinances/fetch_cache.py."""
 
+import sys
+
+import pytest
+
 from ordinances import fetch_cache
+from core.counter import Counter
 
 
 def test_fetch_all_current_pages_until_total(monkeypatch):
@@ -90,3 +95,19 @@ def test_fetch_details_records_detail_failures(monkeypatch):
 
     assert counter.snapshot() == (0, 0, 1)
     assert failures == [{"자치법규ID": "bad", "reason": "detail_fetch_failed"}]
+
+
+def test_main_exits_when_detail_fetch_has_errors(monkeypatch):
+    counter = Counter()
+    counter.inc("errors")
+
+    monkeypatch.setattr(sys, "argv", ["ordinances.fetch_cache", "--skip-quota-check"])
+    monkeypatch.setattr(
+        fetch_cache,
+        "fetch_all_current",
+        lambda types, org="", sborg="", display=100, max_entries=None: [],
+    )
+    monkeypatch.setattr(fetch_cache, "fetch_details", lambda entries, workers, limit: counter)
+
+    with pytest.raises(SystemExit, match="ordinance detail fetch failed: errors=1"):
+        fetch_cache.main()

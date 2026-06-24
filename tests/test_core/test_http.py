@@ -9,7 +9,7 @@ from requests.exceptions import ConnectionError
 from core.http import make_request
 from core.throttle import Throttle
 
-LAW_API_BASE = "http://www.law.go.kr/DRF"
+LAW_API_BASE = "https://www.law.go.kr/DRF"
 TEST_URL = f"{LAW_API_BASE}/lawSearch.do"
 
 

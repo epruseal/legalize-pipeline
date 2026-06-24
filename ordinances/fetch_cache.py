@@ -15,6 +15,11 @@ from .failures import append_failure
 logger = logging.getLogger(__name__)
 
 
+def _exit_if_errors(errors: int) -> None:
+    if errors:
+        raise SystemExit(f"ordinance detail fetch failed: errors={errors}")
+
+
 def _compact_date(value: str) -> str:
     return "".join(ch for ch in str(value) if ch.isdigit())
 
@@ -128,7 +133,9 @@ def main() -> None:
         ensure_headroom(expected_requests=args.limit or 200000, corpus="ordinances")
     entries = fetch_all_current(args.types, org=args.org, sborg=args.sborg, display=args.display, max_entries=args.limit)
     counter = fetch_details(entries, workers=args.workers, limit=args.limit)
-    logger.info("ordinance fetch done: cached=%s fetched=%s errors=%s", *counter.snapshot())
+    cached, fetched, errors = counter.snapshot()
+    logger.info("ordinance fetch done: cached=%s fetched=%s errors=%s", cached, fetched, errors)
+    _exit_if_errors(errors)
 
 
 if __name__ == "__main__":
