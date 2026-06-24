@@ -20,7 +20,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from . import cache
+from . import cache, detail_failure_allowlist
 from .api_client import get_law_detail, get_law_history, search_laws
 from .config import CONCURRENT_WORKERS
 from .history_allowlist import filter_and_check
@@ -61,6 +61,15 @@ def _fetch_detail_task(mst: str, name: str, counter: Counter) -> None:
         get_law_detail(mst)
         counter.inc("fetched")
     except Exception as e:
+        entry = detail_failure_allowlist.accepted_entry(mst, e)
+        if entry is not None:
+            law_name = name or entry["law_name"]
+            logger.warning(
+                f"Known upstream detail failure MST {mst} ({law_name}): {e} "
+                f"[{entry['reason']}]"
+            )
+            counter.inc("known_failures")
+            return
         logger.error(f"Failed MST {mst} ({name}): {e}")
         counter.inc("errors")
 
@@ -222,6 +231,7 @@ def main():
     from .history_allowlist import load_allowlist
     try:
         load_allowlist()
+        detail_failure_allowlist.load_allowlist()
     except Exception as e:
         logger.error(f"Allowlist pre-flight failed: {e}")
         raise
@@ -265,6 +275,9 @@ def main():
 
         c, f, e = counter.snapshot()
         logger.info(f"Detail fetch done: cached={c}, fetched={f}, errors={e}")
+        known = counter.snapshot_all().get("known_failures", 0)
+        if known:
+            logger.warning(f"Known detail failures skipped: known_failures={known}")
         _exit_if_errors("law detail fetch", e)
         return
 
@@ -330,6 +343,9 @@ def main():
 
     c, f, e = detail_counter.snapshot()
     logger.info(f"Detail fetch done: cached={c}, fetched={f}, errors={e}")
+    known = detail_counter.snapshot_all().get("known_failures", 0)
+    if known:
+        logger.warning(f"Known detail failures skipped: known_failures={known}")
     _exit_if_errors("law detail fetch", e)
 
 

@@ -15,6 +15,7 @@ import responses as responses_lib
 
 import laws.api_client as api_client
 import laws.cache as law_cache
+import laws.detail_failure_allowlist as detail_failure_allowlist
 import laws.fetch_cache as fetch_cache
 
 LAW_API_BASE = "https://www.law.go.kr/DRF"
@@ -30,6 +31,13 @@ def patch_api_key(monkeypatch):
     monkeypatch.setattr(api_client, "LAW_API_KEY", "testkey")
     from core.throttle import Throttle
     monkeypatch.setattr(api_client, "_throttle", Throttle(delay_seconds=0))
+
+
+@pytest.fixture(autouse=True)
+def clear_detail_failure_allowlist_cache():
+    detail_failure_allowlist.load_allowlist.cache_clear()
+    yield
+    detail_failure_allowlist.load_allowlist.cache_clear()
 
 
 def _row(mst: str, name: str) -> str:
@@ -95,6 +103,36 @@ def test_main_exits_when_skip_history_detail_fetch_has_errors(monkeypatch):
 
     with pytest.raises(SystemExit, match="law detail fetch failed: errors=1"):
         fetch_cache.main()
+
+
+def test_fetch_detail_task_skips_allowlisted_upstream_failure(tmp_path: Path, monkeypatch):
+    allowlist_path = tmp_path / "known_detail_failures.yaml"
+    allowlist_path.write_text(
+        "\n".join([
+            "entries:",
+            '  - mst: "123"',
+            '    law_name: "깨진법"',
+            '    reason: "upstream_malformed_xml"',
+            '    expected_error: "mismatched tag"',
+            '    expires_on: "2099-01-01"',
+        ]),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(detail_failure_allowlist, "_DEFAULT_PATH", allowlist_path)
+    detail_failure_allowlist.load_allowlist.cache_clear()
+    monkeypatch.setattr(
+        fetch_cache,
+        "get_law_detail",
+        lambda _mst: (_ for _ in ()).throw(RuntimeError("mismatched tag: line 1")),
+    )
+
+    from core.counter import Counter
+
+    counter = Counter()
+    fetch_cache._fetch_detail_task("123", "", counter)
+
+    assert counter.snapshot() == (0, 0, 0)
+    assert counter.snapshot_all()["known_failures"] == 1
 
 
 @responses_lib.activate
