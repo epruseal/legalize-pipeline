@@ -102,6 +102,18 @@ def test_enforcement_decree():
     assert fname == "시행령"
 
 
+def test_enforcement_decree_without_space():
+    group, fname = get_group_and_filename("법인세법시행령", "대통령령")
+    assert group == "법인세법"
+    assert fname == "시행령"
+
+
+def test_enforcement_rule_without_space():
+    group, fname = get_group_and_filename("법인세법시행규칙", "기획재정부령")
+    assert group == "법인세법"
+    assert fname == "시행규칙"
+
+
 def test_enforcement_rule():
     group, fname = get_group_and_filename("민법 시행규칙", "부령")
     assert group == "민법"
@@ -349,6 +361,45 @@ def test_article_no_title():
     md = articles_to_markdown(articles)
     assert "##### 제2조" in md
     assert "()" not in md
+
+
+def test_article_escapes_accidental_markdown_links():
+    articles = [{
+        "조문번호": "1",
+        "조문제목": "",
+        "조문내용": "제1조 [별표 3](일반직등)을 적용한다.",
+        "항": [],
+    }]
+
+    md = articles_to_markdown(articles)
+
+    assert "\\[별표 3](일반직등)" in md
+
+
+def test_article_escapes_accidental_markdown_links_in_nested_units():
+    articles = [{
+        "조문번호": "1",
+        "조문제목": "",
+        "조문내용": "",
+        "항": [{
+            "항번호": "①",
+            "항내용": "① [별표 1](항)을 적용한다.",
+            "호": [{
+                "호번호": "1.",
+                "호내용": "1. [별표 2](호)을 적용한다.",
+                "목": [{
+                    "목번호": "가.",
+                    "목내용": "가. [별표 3](목)을 적용한다.",
+                }],
+            }],
+        }],
+    }]
+
+    md = articles_to_markdown(articles)
+
+    assert "\\[별표 1](항)" in md
+    assert "\\[별표 2](호)" in md
+    assert "\\[별표 3](목)" in md
 
 
 def test_structural_heading_jang():
@@ -653,6 +704,17 @@ def test_law_to_markdown_addenda_only_passes():
     result = law_to_markdown(detail)
     assert "## 부칙" in result
     assert "이 법은 공포일부터 시행한다." in result
+
+
+def test_law_to_markdown_escapes_accidental_markdown_links_in_addenda():
+    detail = _minimal_detail(
+        articles=[],
+        addenda=[{"부칙내용": "[별표 4](부칙)을 적용한다."}],
+    )
+
+    result = law_to_markdown(detail)
+
+    assert "\\[별표 4](부칙)" in result
 
 
 def test_law_to_markdown_renders_attachments_in_frontmatter():

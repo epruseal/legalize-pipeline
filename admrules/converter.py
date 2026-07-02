@@ -7,6 +7,8 @@ from xml.etree import ElementTree
 
 import yaml
 
+from core.markdown import escape_accidental_markdown_links
+
 from .config import VALID_ADMRULE_TYPES
 
 _MAX_STEM_BYTES = 180
@@ -564,7 +566,7 @@ def _plain_text(root: ElementTree.Element) -> str:
         for node in root.findall(f".//{tag}"):
             if node.text and node.text.strip():
                 parts.append(normalize_nfc(node.text.strip()))
-    return "\n\n".join(parts)
+    return escape_accidental_markdown_links("\n\n".join(parts))
 
 
 def xml_to_markdown(raw_xml: bytes | str, attachment_metadata: list[dict] | None = None) -> str:

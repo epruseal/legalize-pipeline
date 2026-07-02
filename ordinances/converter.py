@@ -7,6 +7,7 @@ from xml.etree import ElementTree
 
 import yaml
 
+from core.markdown import escape_accidental_markdown_links
 from laws.converter import articles_to_markdown
 
 from .config import STORAGE_TYPES, TYPE_CODES
@@ -310,7 +311,7 @@ def ordinance_to_markdown(detail: dict) -> str:
     if articles_md.strip():
         body_parts.append(articles_md)
     for item in detail.get("addenda", []):
-        content = (item.get("부칙내용") or "").strip()
+        content = escape_accidental_markdown_links((item.get("부칙내용") or "").strip())
         if content:
             if "## 부칙" not in body_parts:
                 body_parts.extend(["## 부칙", ""])

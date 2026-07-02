@@ -484,6 +484,24 @@ def test_xml_to_markdown_extracts_frontmatter_and_body():
     assert "제1조 목적" in md
 
 
+def test_xml_to_markdown_escapes_accidental_markdown_links():
+    xml = """
+    <AdmRulService>
+      <행정규칙ID>ABC</행정규칙ID>
+      <행정규칙일련번호>123</행정규칙일련번호>
+      <행정규칙명>공공데이터 관리지침</행정규칙명>
+      <행정규칙종류>고시</행정규칙종류>
+      <소관부처명>행정안전부</소관부처명>
+      <발령일자>20240504</발령일자>
+      <조문내용>제1조 [별표 3](경력환산율표)을 적용한다.</조문내용>
+    </AdmRulService>
+    """
+
+    md = xml_to_markdown(xml)
+
+    assert "\\[별표 3](경력환산율표)" in md
+
+
 def test_xml_to_markdown_quotes_yaml_sensitive_title():
     xml = """
     <AdmRulService>

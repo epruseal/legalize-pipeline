@@ -5,6 +5,8 @@ import re
 
 import yaml
 
+from core.markdown import escape_accidental_markdown_links
+
 from .config import CHILD_SUFFIXES, TYPE_TO_FILENAME
 
 
@@ -288,7 +290,9 @@ def articles_to_markdown(articles: list[dict]) -> str:
         branch_number = article.get("조문가지번호", "")
         article_kind = article.get("조문여부", "")
         title = article.get("조문제목", "")
-        content = (article.get("조문내용") or "").strip().translate(_DOT_NORMALIZE)
+        content = escape_accidental_markdown_links(
+            (article.get("조문내용") or "").strip().translate(_DOT_NORMALIZE)
+        )
 
         # `<조문여부>전문</조문여부>` uses `<조문번호>` only as a placement key.
         # It must not become a `제N조` heading.
@@ -337,7 +341,9 @@ def articles_to_markdown(articles: list[dict]) -> str:
             para_branch = para.get("항가지번호", "")
             if para_num and para_branch:
                 para_num = f"{para_num}의{para_branch}"
-            para_content = para.get("항내용", "").translate(_DOT_NORMALIZE)
+            para_content = escape_accidental_markdown_links(
+                para.get("항내용", "").translate(_DOT_NORMALIZE)
+            )
             if para_content:
                 # Strip leading ①②… — already shown as bold prefix
                 stripped = re.sub(r"^[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]\s*", "", para_content.strip())
@@ -350,7 +356,9 @@ def articles_to_markdown(articles: list[dict]) -> str:
                 sub_branch = subpara.get("호가지번호", "").strip()
                 if sub_num and sub_branch:
                     sub_num = f"{sub_num}의{sub_branch}"
-                sub_content = subpara.get("호내용", "").translate(_DOT_NORMALIZE)
+                sub_content = escape_accidental_markdown_links(
+                    subpara.get("호내용", "").translate(_DOT_NORMALIZE)
+                )
                 if sub_content:
                     stripped = _HO_PREFIX_RE.sub("", sub_content.strip())
                     stripped = _normalize_ws(stripped)
@@ -364,7 +372,9 @@ def articles_to_markdown(articles: list[dict]) -> str:
                     item_branch = item.get("목가지번호", "").strip()
                     if item_num and item_branch:
                         item_num = f"{item_num}의{item_branch}"
-                    item_content = item.get("목내용", "").translate(_DOT_NORMALIZE)
+                    item_content = escape_accidental_markdown_links(
+                        item.get("목내용", "").translate(_DOT_NORMALIZE)
+                    )
                     if item_content:
                         stripped = _MOK_PREFIX_RE.sub("", item_content.strip())
                         stripped = _normalize_ws(stripped)
@@ -415,7 +425,7 @@ def law_to_markdown(detail: dict) -> str:
         body_parts.append("## 부칙")
         body_parts.append("")
         for item in addenda:
-            content = (item.get("부칙내용") or "").strip()
+            content = escape_accidental_markdown_links((item.get("부칙내용") or "").strip())
             if content:
                 body_parts.append(_dedent_content(content))
                 body_parts.append("")

@@ -104,6 +104,25 @@ def test_xml_to_markdown_uses_addenda_when_articles_are_empty():
     assert "이 조례는 공포한 날부터 시행한다." in markdown
 
 
+def test_xml_to_markdown_escapes_accidental_markdown_links_in_addenda():
+    xml = SAMPLE_XML.replace(
+        """<조문단위>
+    <조문번호>1</조문번호>
+    <조문제목>목적</조문제목>
+    <조문내용>제1조(목적) 이 조례는 테스트를 목적으로 한다.</조문내용>
+  </조문단위>""",
+        """<부칙>
+    <부칙공포일자>20210930</부칙공포일자>
+    <부칙공포번호>7825</부칙공포번호>
+    <부칙내용>[별표4](생략)을 적용한다.</부칙내용>
+  </부칙>""",
+    )
+
+    _, markdown = converter.xml_to_markdown(xml)
+
+    assert "\\[별표4](생략)" in markdown
+
+
 def test_xml_to_markdown_adds_attachment_links():
     xml = SAMPLE_XML.replace(
         "</자치법규>",

@@ -192,6 +192,18 @@ def test_html_to_markdown_strips_tags():
     assert "</b>" not in result
 
 
+def test_html_to_markdown_escapes_accidental_markdown_links():
+    result = conv.html_to_markdown("[별표 3](생략)을 참조")
+
+    assert "\\[별표 3](생략)" in result
+
+
+def test_normalize_case_name_escapes_accidental_markdown_links():
+    result = conv.normalize_case_name("[별표 3](생략) 사건")
+
+    assert result == "\\[별표 3](생략) 사건"
+
+
 def test_html_to_markdown_collapses_blank_lines():
     # 3 br tags → 3 newlines; collapse so max 1 consecutive blank line
     result = conv.html_to_markdown("첫줄<br/><br/><br/>넷째줄")
