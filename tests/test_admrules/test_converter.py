@@ -600,6 +600,66 @@ def test_xml_to_markdown_extracts_frontmatter_and_body():
     assert "제1조 목적" in md
 
 
+def test_xml_to_markdown_renders_structured_legal_body():
+    xml = """
+    <AdmRulService>
+      <행정규칙ID>ABC</행정규칙ID>
+      <행정규칙일련번호>123</행정규칙일련번호>
+      <행정규칙명>공공주택 업무처리지침</행정규칙명>
+      <행정규칙종류>훈령</행정규칙종류>
+      <소관부처명>국토교통부</소관부처명>
+      <발령일자>20260703</발령일자>
+      <조문내용><![CDATA[제1장 총칙
+]]></조문내용>
+      <조문내용><![CDATA[제1조(목적) 이 지침은 필요한 사항을 규정함을 목적으로 한다.
+]]></조문내용>
+      <조문내용><![CDATA[제2조(적용범위) ① 이 지침은 공공주택사업에 적용한다.
+  ② 세부 사항은 다음 각 호에 따른다.
+  1. 공공임대주택
+    가. 전용면적 60제곱미터 이하 주택
+  ③ 그 밖의 사항은 별도로 정한다.
+]]></조문내용>
+      <조문내용><![CDATA[제3장의2 도심공공주택 복합사업
+]]></조문내용>
+      <조문내용><![CDATA[제16조 삭제
+]]></조문내용>
+    </AdmRulService>
+    """
+
+    md = xml_to_markdown(xml)
+
+    assert "\n# 공공주택 업무처리지침\n\n## 제1장 총칙\n" in md
+    assert "##### 제1조 (목적)\n\n이 지침은 필요한 사항을 규정함을 목적으로 한다." in md
+    assert "##### 제2조 (적용범위)\n\n**①** 이 지침은 공공주택사업에 적용한다." in md
+    assert "**②** 세부 사항은 다음 각 호에 따른다.\n\n  1\\. 공공임대주택" in md
+    assert "    가\\. 전용면적 60제곱미터 이하 주택" in md
+    assert "    가\\. 전용면적 60제곱미터 이하 주택\n\n**③** 그 밖의 사항" in md
+    assert "\n## 제3장의2 도심공공주택 복합사업\n" in md
+    assert "##### 제16조\n\n삭제" in md
+
+
+def test_xml_to_markdown_preserves_ambiguous_body_lines():
+    xml = """
+    <AdmRulService>
+      <행정규칙ID>ABC</행정규칙ID>
+      <행정규칙일련번호>123</행정규칙일련번호>
+      <행정규칙명>모호한 고시</행정규칙명>
+      <행정규칙종류>고시</행정규칙종류>
+      <소관부처명>행정안전부</소관부처명>
+      <발령일자>20240504</발령일자>
+      <조문내용>제1조 목적</조문내용>
+      <조문내용>1.2퍼센트 기준은 수치 표현이다.</조문내용>
+    </AdmRulService>
+    """
+
+    md = xml_to_markdown(xml)
+
+    assert "\n# 모호한 고시\n\n제1조 목적\n" in md
+    assert "##### 제1조" not in md
+    assert "1.2퍼센트 기준은 수치 표현이다." in md
+    assert "1\\. 2퍼센트" not in md
+
+
 def test_xml_to_markdown_escapes_accidental_markdown_links():
     xml = """
     <AdmRulService>

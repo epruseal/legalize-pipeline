@@ -14,6 +14,15 @@ from .config import VALID_ADMRULE_TYPES
 
 _MAX_STEM_BYTES = 180
 _INVALID_PATH_CHARS_RE = re.compile(r"[\x00-\x1f\\/:\0\"'<>|?*]")
+_STRUCTURE_RE = re.compile(r"^제\d+(?:의\d+)?(?P<kind>편|장|절|관)(?:의\d+)?(?:\s+.+)?$")
+_ARTICLE_WITH_TITLE_RE = re.compile(
+    r"^제(?P<number>\d+)조(?P<branch>의\d+)?\s*\((?P<title>[^)]*)\)\s*(?P<body>.*)$"
+)
+_ARTICLE_DELETED_RE = re.compile(r"^제(?P<number>\d+)조(?P<branch>의\d+)?\s+삭제$")
+_PARAGRAPH_RE = re.compile(r"^\s*([①-⑳㉑-㉟㊱-㊿])\s*(.*)$")
+_SUBPARAGRAPH_RE = re.compile(r"^\s*(\d+(?:의\d+)?)\.\s+(.+)$")
+_ITEM_RE = re.compile(r"^\s*([가-힣](?:의\d+)?)\.\s+(.+)$")
+_STRUCTURE_LEVEL = {"편": "#", "장": "##", "절": "###", "관": "####"}
 _WINDOWS_RESERVED_NAMES = {
     "CON",
     "PRN",
@@ -500,6 +509,80 @@ def _plain_text(root: ElementTree.Element) -> str:
     return escape_accidental_markdown_links("\n\n".join(parts))
 
 
+def _append_blank(lines: list[str]) -> None:
+    if lines and lines[-1] != "":
+        lines.append("")
+
+
+def _render_content_line(line: str) -> list[str]:
+    if match := _PARAGRAPH_RE.match(line):
+        marker, text = match.groups()
+        rendered = f"**{marker}**"
+        if text:
+            rendered = f"{rendered} {text}"
+        return [rendered, ""]
+    if match := _SUBPARAGRAPH_RE.match(line):
+        marker, text = match.groups()
+        return [f"  {marker}\\. {text}".rstrip()]
+    if match := _ITEM_RE.match(line):
+        marker, text = match.groups()
+        return [f"    {marker}\\. {text}".rstrip()]
+    return [line]
+
+
+def _is_paragraph_line(line: str) -> bool:
+    return bool(_PARAGRAPH_RE.match(line))
+
+
+def _render_structured_body(title: str, body: str) -> str:
+    lines: list[str] = []
+    if title:
+        lines.extend([f"# {title}", ""])
+
+    for raw_line in body.splitlines():
+        line = raw_line.rstrip()
+        if not line.strip():
+            _append_blank(lines)
+            continue
+
+        if match := _STRUCTURE_RE.match(line.strip()):
+            _append_blank(lines)
+            lines.append(f"{_STRUCTURE_LEVEL[match.group('kind')]} {line.strip()}")
+            lines.append("")
+            continue
+
+        if match := _ARTICLE_WITH_TITLE_RE.match(line.strip()):
+            _append_blank(lines)
+            number = match.group("number")
+            branch = match.group("branch") or ""
+            title_part = match.group("title").strip()
+            heading = f"##### 제{number}조{branch}"
+            if title_part:
+                heading += f" ({title_part})"
+            lines.extend([heading, ""])
+            body_part = match.group("body").strip()
+            if body_part:
+                if _is_paragraph_line(body_part):
+                    _append_blank(lines)
+                lines.extend(_render_content_line(body_part))
+            continue
+
+        if match := _ARTICLE_DELETED_RE.match(line.strip()):
+            _append_blank(lines)
+            number = match.group("number")
+            branch = match.group("branch") or ""
+            lines.extend([f"##### 제{number}조{branch}", "", "삭제", ""])
+            continue
+
+        if _is_paragraph_line(line):
+            _append_blank(lines)
+        lines.extend(_render_content_line(line))
+
+    while lines and lines[-1] == "":
+        lines.pop()
+    return "\n".join(lines)
+
+
 def xml_to_markdown(raw_xml: bytes | str, attachment_metadata: list[dict] | None = None) -> str:
     root = ElementTree.fromstring(raw_xml)
     metadata = _metadata_from_xml(root)
@@ -510,6 +593,7 @@ def xml_to_markdown(raw_xml: bytes | str, attachment_metadata: list[dict] | None
         body = "본문은 국가법령정보센터 원문 또는 첨부파일을 참조하세요."
 
     frontmatter = build_frontmatter(metadata, attachments)
+    body = _render_structured_body(metadata.get("행정규칙명", ""), body)
     yaml_text = yaml.dump(
         _quote_yaml_strings(frontmatter),
         Dumper=_AdmruleDumper,

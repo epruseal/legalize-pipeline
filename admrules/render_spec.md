@@ -2,8 +2,8 @@
 
 Status: draft implementation seed.
 
-This file freezes the Python-side rendering rules used by `admrules.converter`
-before the Rust compiler parity gate exists.
+This file freezes the rendering rules shared by Python `admrules.converter`
+and the Rust `admrule-kr-compiler`.
 
 - Repository layout:
   `{기관경로...}/{행정규칙종류}/{행정규칙명}/본문.md`.
@@ -83,6 +83,21 @@ before the Rust compiler parity gate exists.
   clamped to 1970-01-01 in frontmatter with `발령일자보정: true` and the raw
   API text preserved in `발령일자원문`.
 - `본문출처` is one of `api-text`, `parsed-from-hwp`, `parsing-failed`.
+- Markdown body rendering starts with `# {행정규칙명}` when a title is
+  available. The raw API text is then structured conservatively:
+  - `제N편`, `제N장`, `제N절`, and `제N관` lines become `#`, `##`, `###`,
+    and `####` headings respectively.
+  - Clear `제N조(제목)` and `제N조의M(제목)` lines become
+    `##### 제N조 (제목)` headings. Text after the title remains as the first
+    article body line.
+  - `제N조 삭제` and `제N조의M 삭제` become an article heading followed by
+    `삭제`.
+  - Lines beginning with circled paragraph numbers become `**①** ...`;
+    lines beginning with numeric subparagraph markers become
+    `  N\. ...`; lines beginning with Korean item markers become
+    `    가\. ...`.
+  - Lines that do not match these clear legal-text patterns are preserved
+    verbatim after Markdown-link escaping.
 - Binary attachments are never written to the Git tree. Attachment frontmatter
   is written under `첨부파일` as link metadata only, with `파일링크` and/or
   `PDF링크` when upstream provides 별표/서식 download links.
