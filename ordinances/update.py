@@ -30,9 +30,9 @@ def _current_serials(entries: list[dict], limit: int | None = None) -> list[str]
     return serials[:limit] if limit is not None else serials
 
 
-def _committed_values(repo: Path, prefix: str) -> set[str]:
+def _committed_metadata(repo: Path) -> tuple[set[str], set[str]]:
     if not (repo / ".git").exists():
-        return set()
+        return set(), set()
     result = subprocess.run(
         ["git", "log", "--all", "--format=%B"],
         cwd=repo,
@@ -40,20 +40,17 @@ def _committed_values(repo: Path, prefix: str) -> set[str]:
         text=True,
     )
     if result.returncode != 0:
-        return set()
-    return {
-        line[len(prefix):].strip()
-        for line in result.stdout.splitlines()
-        if line.startswith(prefix) and line[len(prefix):].strip()
-    }
-
-
-def _committed_serials(repo: Path) -> set[str]:
-    return _committed_values(repo, "자치법규일련번호: ")
-
-
-def _committed_identities(repo: Path) -> set[str]:
-    return _committed_values(repo, "자치법규ID: ")
+        return set(), set()
+    serial_prefix = "자치법규일련번호: "
+    identity_prefix = "자치법규ID: "
+    serials = set()
+    identities = set()
+    for line in result.stdout.splitlines():
+        if line.startswith(serial_prefix) and line[len(serial_prefix):].strip():
+            serials.add(line[len(serial_prefix):].strip())
+        elif line.startswith(identity_prefix) and line[len(identity_prefix):].strip():
+            identities.add(line[len(identity_prefix):].strip())
+    return serials, identities
 
 
 def _compact_date(value: str) -> str:
@@ -74,8 +71,7 @@ def _import_serials(entries: list[dict], repo: Path, date_range: str, *, commit:
     if not commit:
         return current_serials
 
-    committed_serials = _committed_serials(repo)
-    committed_identities = _committed_identities(repo)
+    committed_serials, committed_identities = _committed_metadata(repo)
     serials = []
     for entry in entries:
         serial = str(entry.get("자치법규일련번호", "")) or str(entry.get("자치법규ID", ""))

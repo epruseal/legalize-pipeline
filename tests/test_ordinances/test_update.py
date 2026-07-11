@@ -25,8 +25,7 @@ def test_run_fetches_then_imports(tmp_path, monkeypatch):
         ],
     )
     monkeypatch.setattr(update, "fetch_details", lambda entries, workers, limit=None: calls.append(("details", entries, workers, limit)) or Counter())
-    monkeypatch.setattr(update, "_committed_serials", lambda repo: set())
-    monkeypatch.setattr(update, "_committed_identities", lambda repo: set())
+    monkeypatch.setattr(update, "_committed_metadata", lambda repo: (set(), set()))
     monkeypatch.setattr(
         update,
         "import_from_cache",
@@ -74,8 +73,7 @@ def test_run_imports_only_uncommitted_serials_for_existing_identity(tmp_path, mo
         ],
     )
     monkeypatch.setattr(update, "fetch_details", lambda entries, workers, limit=None: Counter())
-    monkeypatch.setattr(update, "_committed_serials", lambda repo: {"already"})
-    monkeypatch.setattr(update, "_committed_identities", lambda repo: {"1"})
+    monkeypatch.setattr(update, "_committed_metadata", lambda repo: ({"already"}, {"1"}))
     monkeypatch.setattr(
         update,
         "import_from_cache",
@@ -87,3 +85,24 @@ def test_run_imports_only_uncommitted_serials_for_existing_identity(tmp_path, mo
     update.run(repo=tmp_path, commit=True)
 
     assert imported == ["new"]
+
+
+def test_committed_metadata_reads_git_history_once(tmp_path, monkeypatch):
+    (tmp_path / ".git").mkdir()
+    calls = []
+
+    class Result:
+        returncode = 0
+        stdout = "자치법규ID: 1\n자치법규일련번호: 10\n자치법규ID: 2\n자치법규일련번호: 20\n"
+
+    monkeypatch.setattr(
+        update.subprocess,
+        "run",
+        lambda *args, **kwargs: calls.append((args, kwargs)) or Result(),
+    )
+
+    serials, identities = update._committed_metadata(tmp_path)
+
+    assert serials == {"10", "20"}
+    assert identities == {"1", "2"}
+    assert len(calls) == 1

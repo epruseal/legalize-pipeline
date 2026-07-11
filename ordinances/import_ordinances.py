@@ -151,6 +151,9 @@ def import_from_cache(
             logger.exception("Failed rendering ordinance cache_key=%s", candidate["cache_key"])
             counters["errors"] += 1
 
+    if not entries:
+        return counters
+
     latest_paths: dict[str, str] = _current_paths_by_identity(repo_dir) if commit else {}
     for entry in sorted(entries, key=_sort_key):
         try:

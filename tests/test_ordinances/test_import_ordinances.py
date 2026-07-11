@@ -18,6 +18,18 @@ def test_import_from_cache_writes_markdown(tmp_path, monkeypatch):
     assert (tmp_path / "서울특별시/_본청/조례/서울특별시 테스트 조례/본문.md").exists()
 
 
+def test_import_from_cache_skips_head_scan_when_no_serials_need_import(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        import_ordinances,
+        "_current_paths_by_identity",
+        lambda repo: (_ for _ in ()).throw(AssertionError("HEAD scan must not run")),
+    )
+
+    counters = import_ordinances.import_from_cache(tmp_path, commit=True, serials=[])
+
+    assert counters == {"written": 0, "deleted": 0, "committed": 0, "skipped": 0, "errors": 0}
+
+
 def test_import_from_cache_commits_in_date_order(tmp_path, monkeypatch):
     old_xml = SAMPLE_XML.replace("<자치법규ID>2000111</자치법규ID>", "<자치법규ID>200</자치법규ID>").replace(
         "<자치법규일련번호>12345</자치법규일련번호>",
