@@ -21,7 +21,7 @@ env:
 jobs:
   update:
     runs-on: self-hosted
-    timeout-minutes: 60
+    timeout-minutes: 360
 
     steps:
       - name: Checkout law repo
