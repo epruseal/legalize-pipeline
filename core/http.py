@@ -2,6 +2,7 @@
 
 import logging
 import time
+from collections.abc import Callable, Collection
 
 import requests
 
@@ -18,6 +19,8 @@ def make_request(
     api_key: str,
     max_retries: int = 3,
     backoff_base: float = 2.0,
+    non_retry_statuses: Collection[int] = (),
+    on_attempt: Callable[[], None] | None = None,
 ) -> requests.Response:
     """Make a throttled HTTP GET with retry and exponential backoff."""
     params["OC"] = api_key
@@ -25,6 +28,8 @@ def make_request(
     for attempt in range(max_retries + 1):
         throttle.wait()
         try:
+            if on_attempt is not None:
+                on_attempt()
             resp = requests.get(url, params=params, timeout=30)
             if resp.status_code == 429:
                 wait = backoff_base * (2 ** attempt)
@@ -34,6 +39,9 @@ def make_request(
             resp.raise_for_status()
             return resp
         except requests.RequestException as e:
+            status = e.response.status_code if e.response is not None else None
+            if status in non_retry_statuses:
+                raise
             if attempt == max_retries:
                 raise
             wait = backoff_base * (2 ** attempt)

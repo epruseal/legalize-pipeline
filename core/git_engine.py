@@ -100,6 +100,7 @@ def commit_with_historical_date(
     *,
     author: str = BOT_AUTHOR,
     dedup_grep_key: str | None = None,
+    allow_empty: bool = False,
 ) -> bool:
     """Stage and commit files with GIT_AUTHOR_DATE/GIT_COMMITTER_DATE set."""
     repo_dir = Path(repo_dir)
@@ -116,6 +117,21 @@ def commit_with_historical_date(
     if dedup_grep_key and commit_exists(repo_dir, dedup_grep_key):
         logger.info("Commit already exists for %s, skipping", dedup_grep_key)
         return False
+
+    if not rel_paths and allow_empty:
+        env = historical_commit_env(date, author=author)
+        _run_git(
+            "commit",
+            "--allow-empty",
+            "-m",
+            message,
+            "--author",
+            author,
+            cwd=repo_dir,
+            env=env,
+        )
+        logger.info("Committed empty revision date=%s", env["GIT_AUTHOR_DATE"])
+        return True
 
     _run_git("add", "--", *[str(p) for p in rel_paths], cwd=repo_dir)
     if not file_has_changes(repo_dir, rel_paths):

@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 import pytest
 import responses as responses_lib
 from requests.exceptions import ConnectionError
+from requests.exceptions import HTTPError
 
 from core.http import make_request
 from core.throttle import Throttle
@@ -70,3 +71,40 @@ def test_make_request_exceeds_retries():
             TEST_URL, {}, throttle=_throttle(), api_key="k",
             max_retries=2, backoff_base=0.0
         )
+
+
+@responses_lib.activate
+def test_make_request_does_not_retry_selected_status():
+    responses_lib.add(responses_lib.GET, TEST_URL, status=404)
+
+    with pytest.raises(HTTPError):
+        make_request(
+            TEST_URL,
+            {},
+            throttle=_throttle(),
+            api_key="k",
+            max_retries=3,
+            backoff_base=0.0,
+            non_retry_statuses={404},
+        )
+
+    assert len(responses_lib.calls) == 1
+
+
+@responses_lib.activate
+def test_make_request_reports_each_attempt():
+    attempts = []
+    responses_lib.add(responses_lib.GET, TEST_URL, body=ConnectionError("network down"))
+    responses_lib.add(responses_lib.GET, TEST_URL, body=b"<ok/>", status=200)
+
+    make_request(
+        TEST_URL,
+        {},
+        throttle=_throttle(),
+        api_key="k",
+        max_retries=2,
+        backoff_base=0.0,
+        on_attempt=lambda: attempts.append(True),
+    )
+
+    assert len(attempts) == 2

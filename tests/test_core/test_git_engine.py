@@ -130,3 +130,25 @@ def test_commit_with_historical_date_allows_tracked_deletion(tmp_path: Path):
 
 def test_commit_with_historical_date_missing_file(tmp_path: Path):
     assert git_engine.commit_with_historical_date(tmp_path, [Path("missing.md")], "msg", "2024-01-01") is False
+
+
+def test_commit_with_historical_date_allows_empty_revision(tmp_path: Path):
+    calls = []
+
+    def side_effect(args, **kwargs):
+        calls.append((args, kwargs))
+        return _make_run_result("")
+
+    with patch("subprocess.run", side_effect=side_effect):
+        result = git_engine.commit_with_historical_date(
+            tmp_path,
+            [],
+            "조례: 캐시에 선행본이 없는 폐지\n\n자치법규일련번호: 2",
+            "2024-01-01",
+            dedup_grep_key="자치법규일련번호: 2",
+            allow_empty=True,
+        )
+
+    assert result is True
+    commit_args = next(args for args, _ in calls if "commit" in args)
+    assert "--allow-empty" in commit_args

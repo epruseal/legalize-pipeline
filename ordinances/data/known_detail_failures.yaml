@@ -1,0 +1,14 @@
+# Known upstream ordinance detail failures. Entries are retried after expiry.
+entries:
+  # Verified 2026-07-11: law.go.kr returns an XHTML error because the source
+  # OrdinInfo XML contains an invalid NUL character in a CDATA section.
+  - serial: "1164395"
+    reason: "upstream_invalid_xml_character"
+    expected_error: "invalid 자치법규일련번호=<missing>"
+    expires_on: "2026-10-31"
+  # Verified 2026-07-12: law.go.kr returns an XHTML UnmarshalException because
+  # the source OrdinInfo XML contains U+0005 in a CDATA section.
+  - serial: "886588"
+    reason: "upstream_invalid_xml_character"
+    expected_error: "invalid 자치법규일련번호=<missing>"
+    expires_on: "2026-10-31"

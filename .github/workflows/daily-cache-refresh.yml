@@ -21,7 +21,7 @@ env:
 jobs:
   refresh:
     runs-on: self-hosted
-    timeout-minutes: 240
+    timeout-minutes: 360
 
     steps:
       - name: Checkout law repo
@@ -63,6 +63,8 @@ jobs:
           ln -s "$LEGALIZE_CACHE_DIR" "$WORKSPACE_ROOT/.cache"
 
       - name: Fetch laws cache
+        id: fetch_laws
+        continue-on-error: true
         working-directory: ${{ env.PIPELINE_REPO }}
         env:
           LAW_OC: ${{ secrets.LAW_OC }}
@@ -75,6 +77,8 @@ jobs:
           python -m laws.fetch_cache --refresh-history --history-name-file laws/data/history_seed_names.txt
 
       - name: Fetch precedents cache
+        id: fetch_precedents
+        continue-on-error: true
         working-directory: ${{ env.PIPELINE_REPO }}
         env:
           LAW_OC: ${{ secrets.LAW_OC }}
@@ -83,6 +87,8 @@ jobs:
           python -m precedents.fetch_cache
 
       - name: Fetch administrative rules history cache
+        id: fetch_admrules
+        continue-on-error: true
         working-directory: ${{ env.PIPELINE_REPO }}
         env:
           LAW_OC: ${{ secrets.LAW_OC }}
@@ -91,13 +97,17 @@ jobs:
           python -m admrules.fetch_cache
 
       - name: Fetch ordinances cache
+        id: fetch_ordinances
+        continue-on-error: true
         working-directory: ${{ env.PIPELINE_REPO }}
         env:
           LAW_OC: ${{ secrets.LAW_OC }}
-          LAW_API_DAILY_BUDGET: inf
+          LAW_API_DAILY_BUDGET: '300000'
         run: |
           . "$WORKSPACE_ROOT/.venv/bin/activate"
-          python -m ordinances.fetch_cache
+          # Preserve legacy ID-key files, seed current serials under history/,
+          # and resume at most 50k missing historical details per daily run.
+          python -m ordinances.fetch_cache --history --display 500 --max-new-details 50000
 
       - name: Cache size summary
         working-directory: ${{ env.PIPELINE_REPO }}
@@ -144,3 +154,25 @@ jobs:
           name: cache-baseline
           path: cache-baseline.json
           retention-days: 90
+
+      - name: Report cache fetch failures
+        if: always()
+        run: |
+          failed=0
+          if [ "${{ steps.fetch_laws.outcome }}" != "success" ]; then
+            echo "::error::Laws cache fetch failed"
+            failed=1
+          fi
+          if [ "${{ steps.fetch_precedents.outcome }}" != "success" ]; then
+            echo "::error::Precedents cache fetch failed"
+            failed=1
+          fi
+          if [ "${{ steps.fetch_admrules.outcome }}" != "success" ]; then
+            echo "::error::Administrative rules cache fetch failed"
+            failed=1
+          fi
+          if [ "${{ steps.fetch_ordinances.outcome }}" != "success" ]; then
+            echo "::error::Ordinances cache fetch failed"
+            failed=1
+          fi
+          exit "$failed"

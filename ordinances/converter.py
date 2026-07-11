@@ -248,7 +248,11 @@ def parse_ordinance_xml(raw_xml: bytes | str) -> dict:
         "공포일자": _text(root, ".//공포일자"),
         "공포번호": _text(root, ".//공포번호"),
         "시행일자": _text(root, ".//시행일자"),
-        "제개정구분": normalize_text(_text(root, ".//제개정구분명") or _text(root, ".//제개정구분")),
+        "제개정구분": normalize_text(
+            _text(root, ".//제개정정보")
+            or _text(root, ".//제개정구분명")
+            or _text(root, ".//제개정구분")
+        ),
         "자치법규분야": normalize_text(_text(root, ".//자치법규분야명")),
         "담당부서": normalize_text(_text(root, ".//담당부서명")),
     }
