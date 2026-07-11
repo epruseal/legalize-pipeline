@@ -60,3 +60,13 @@ def test_load_allowlist_rejects_missing_required_field(tmp_path: Path):
 
     with pytest.raises(DetailFailureAllowlistSchemaError, match="expected_error"):
         allowlist.load_allowlist(path)
+
+
+@pytest.mark.parametrize("serial", ["2100000193865", "2100000101710"])
+def test_default_allowlist_tracks_current_404_detail_failures(serial: str):
+    error = "404 Client Error: Not Found for url: https://www.law.go.kr/DRF/lawService.do"
+
+    entry = allowlist.accepted_entry(serial, error, today=date(2026, 7, 12))
+
+    assert entry is not None
+    assert entry["reason"] == "upstream_http_404"
