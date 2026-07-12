@@ -25,9 +25,17 @@ def _validate_entry(entry: object, idx: int) -> dict:
         )
     for field in _REQUIRED_FIELDS:
         value = entry.get(field)
-        if not isinstance(value, str) or not value.strip():
+        if field == "expected_error":
+            valid = (isinstance(value, str) and bool(value.strip())) or (
+                isinstance(value, list)
+                and bool(value)
+                and all(isinstance(item, str) and item.strip() for item in value)
+            )
+        else:
+            valid = isinstance(value, str) and bool(value.strip())
+        if not valid:
             raise DetailFailureAllowlistSchemaError(
-                f"entries[{idx}]: field '{field}' is missing or not a non-empty string"
+                f"entries[{idx}]: field '{field}' has an invalid value"
             )
     if not re.fullmatch(r"\d+", entry["serial"]):
         raise DetailFailureAllowlistSchemaError(
@@ -93,7 +101,9 @@ def accepted_entry(
     today_ = today if today is not None else date.today()
     if date.fromisoformat(entry["expires_on"]) <= today_:
         return None
-    if entry["expected_error"] not in str(error):
+    expected = entry["expected_error"]
+    patterns = [expected] if isinstance(expected, str) else expected
+    if not any(pattern in str(error) for pattern in patterns):
         return None
     return entry
 

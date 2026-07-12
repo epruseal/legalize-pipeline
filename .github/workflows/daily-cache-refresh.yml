@@ -114,45 +114,16 @@ jobs:
         run: du -sh "$LEGALIZE_CACHE_DIR"/* | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: File-count regression gate
+        working-directory: ${{ env.PIPELINE_REPO }}
         run: |
-          baseline_file="$LEGALIZE_CACHE_DIR/.cache-baseline.json"
-          # Note: legitimate count drops can come from law repeals (detail/), _no_result_ids.txt pruning (precedent/), or upstream cache invalidation. 1% tolerance band absorbs these.
-          pass=true
-          for subdir in detail history precedent images admrule ordinance; do
-            new=$(find "$LEGALIZE_CACHE_DIR/$subdir" -type f 2>/dev/null | wc -l | tr -d ' ')
-            echo "Cache $subdir: $new files"
-            if [ -f "$baseline_file" ]; then
-              baseline=$(BASELINE_FILE="$baseline_file" SUBDIR="$subdir" python3 -c 'import json, os; d=json.load(open(os.environ["BASELINE_FILE"])); print(d.get(os.environ["SUBDIR"], 0))')
-              threshold=$(BASELINE="$baseline" python3 -c 'import os; print(int(int(os.environ["BASELINE"]) * 0.99))')
-              if [ "$new" -lt "$threshold" ]; then
-                echo "::error::Cache regression in $subdir: $new < threshold $threshold (baseline $baseline)"
-                pass=false
-              elif [ "$new" -lt "$baseline" ]; then
-                echo "::warning::Cache count dropped in $subdir: $new < baseline $baseline (within 1% tolerance)"
-              fi
-            fi
-          done
-          python3 - <<'PYTHON_EOF'
-          import json, os, subprocess, pathlib
-          counts = {}
-          for subdir in ["detail", "history", "precedent", "images", "admrule", "ordinance"]:
-              result = subprocess.run(
-                  ["find", f"{os.environ['LEGALIZE_CACHE_DIR']}/{subdir}", "-type", "f"],
-                  capture_output=True, text=True
-              )
-              counts[subdir] = len([l for l in result.stdout.splitlines() if l])
-          payload = json.dumps(counts, indent=2)
-          pathlib.Path("cache-baseline.json").write_text(payload)
-          (pathlib.Path(os.environ["LEGALIZE_CACHE_DIR"]) / ".cache-baseline.json").write_text(payload)
-          print("Wrote cache-baseline.json:", counts)
-          PYTHON_EOF
-          $pass || exit 1
+          . "$WORKSPACE_ROOT/.venv/bin/activate"
+          python -m cache.baseline --cache-dir "$LEGALIZE_CACHE_DIR" --output cache-baseline.json
 
       - name: Upload baseline artifact
         uses: actions/upload-artifact@v7
         with:
           name: cache-baseline
-          path: cache-baseline.json
+          path: ${{ env.PIPELINE_REPO }}/cache-baseline.json
           retention-days: 90
 
       - name: Report cache fetch failures

@@ -7,7 +7,8 @@
 # Schema per entry (all required):
 #   serial: str           - 행정규칙일련번호 as string
 #   reason: str           - free-form classification
-#   expected_error: str   - substring that must appear in the fetch exception
+#   expected_error: str | list[str]
+#                         - substring(s), at least one of which must appear
 #   expires_on: str       - "YYYY-MM-DD" ISO date
 #
 # Loader: admrules/detail_failure_allowlist.py
@@ -204,8 +205,10 @@ entries:
     expected_error: "500 Server Error"
     expires_on: "2026-10-31"
   - serial: "2100000193865"
-    reason: "upstream_http_404"
-    expected_error: "404 Client Error"
+    reason: "upstream_http_404_or_500"
+    expected_error:
+      - "404 Client Error"
+      - "500 Server Error"
     expires_on: "2026-10-31"
   - serial: "2100000184759"
     reason: "upstream_http_500"
@@ -296,8 +299,10 @@ entries:
     expected_error: "500 Server Error"
     expires_on: "2026-10-31"
   - serial: "2100000101710"
-    reason: "upstream_http_404"
-    expected_error: "404 Client Error"
+    reason: "upstream_http_404_or_500"
+    expected_error:
+      - "404 Client Error"
+      - "500 Server Error"
     expires_on: "2026-10-31"
   - serial: "2200000077213"
     reason: "upstream_http_500"

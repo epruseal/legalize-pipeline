@@ -18,6 +18,12 @@ def test_daily_cache_refresh_resumes_bounded_ordinance_history_backfill():
         assert f"id: {step_id}\n        continue-on-error: true" in text
         assert f"steps.{step_id}.outcome" in text
     assert "name: Report cache fetch failures" in text
+    assert 'python -m cache.baseline --cache-dir "$LEGALIZE_CACHE_DIR" --output cache-baseline.json' in text
+    assert "path: ${{ env.PIPELINE_REPO }}/cache-baseline.json" in text
+    gate = text.index("python -m cache.baseline")
+    upload = text.index("name: Upload baseline artifact")
+    report = text.index("name: Report cache fetch failures")
+    assert gate < upload < report
 
 
 def test_daily_ordinance_update_still_updates_validates_and_pushes():
