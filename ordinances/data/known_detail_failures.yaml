@@ -12,3 +12,17 @@ entries:
     reason: "upstream_invalid_xml_character"
     expected_error: "invalid 자치법규일련번호=<missing>"
     expires_on: "2026-10-31"
+  # Verified 2026-07-12 by five retries in Daily Cache Refresh run
+  # 29176571741. lawService.do consistently returns HTTP 500.
+  - serial: "740452"
+    reason: "upstream_http_500"
+    expected_error: "500 Server Error"
+    expires_on: "2026-10-31"
+  - serial: "1079638"
+    reason: "upstream_http_500"
+    expected_error: "500 Server Error"
+    expires_on: "2026-10-31"
+  - serial: "1083571"
+    reason: "upstream_http_500"
+    expected_error: "500 Server Error"
+    expires_on: "2026-10-31"

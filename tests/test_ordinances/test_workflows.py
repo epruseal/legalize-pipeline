@@ -12,8 +12,19 @@ def test_daily_cache_refresh_resumes_bounded_ordinance_history_backfill():
     assert "timeout-minutes: 360" in text
     assert "LEGALIZE_CACHE_DIR: ${{ secrets.LEGALIZE_CACHE_DIR }}" in text
     assert text.index("Link persistent cache") < text.index("Fetch ordinances cache")
-    assert "LAW_API_DAILY_BUDGET: '300000'" in text
-    assert "python -m ordinances.fetch_cache --history --display 500 --max-new-details 50000" in text
+    workflow = yaml.load(text, Loader=yaml.BaseLoader)
+    assert workflow["env"]["LAW_API_DAILY_BUDGET"] == "300000"
+    assert workflow["env"]["ORDINANCE_MAX_NEW_DETAILS"] == (
+        "${{ inputs.ordinance_max_new_details || '50000' }}"
+    )
+    ordinance_input = workflow["on"]["workflow_dispatch"]["inputs"][
+        "ordinance_max_new_details"
+    ]
+    assert ordinance_input["default"] == "50000"
+    assert (
+        'python -m ordinances.fetch_cache --history --display 500 --max-new-details "$ORDINANCE_MAX_NEW_DETAILS"'
+        in text
+    )
     for step_id in ("fetch_laws", "fetch_precedents", "fetch_admrules", "fetch_ordinances"):
         assert f"id: {step_id}\n        continue-on-error: true" in text
         assert f"steps.{step_id}.outcome" in text
