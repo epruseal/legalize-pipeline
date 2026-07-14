@@ -1,5 +1,6 @@
 """Tests for shared Git historical-date commit helpers."""
 
+import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -126,6 +127,53 @@ def test_commit_with_historical_date_allows_tracked_deletion(tmp_path: Path):
         result = git_engine.commit_with_historical_date(tmp_path, [file_path], "msg", "2024-01-01")
 
     assert result is True
+
+
+def test_commit_with_historical_date_commits_git_mv_with_updated_content(tmp_path: Path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+
+    old_path = Path("kr/이전법/법률.md")
+    new_path = Path("kr/현재법/법률.md")
+    (repo / old_path).parent.mkdir(parents=True)
+    (repo / old_path).write_text("old content", encoding="utf-8")
+    subprocess.run(["git", "add", str(old_path)], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "initial"], cwd=repo, check=True)
+
+    (repo / new_path).parent.mkdir(parents=True)
+    subprocess.run(["git", "mv", str(old_path), str(new_path)], cwd=repo, check=True)
+    (repo / new_path).write_text("new content", encoding="utf-8")
+
+    result = git_engine.commit_with_historical_date(
+        repo,
+        [new_path, old_path],
+        "법률: 현재법\n\n법령MST: 2",
+        "2024-01-01",
+    )
+
+    assert result is True
+    assert subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout == ""
+    assert subprocess.run(
+        ["git", "show", f"HEAD:{new_path}"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout == "new content"
+    assert subprocess.run(
+        ["git", "cat-file", "-e", f"HEAD:{old_path}"],
+        cwd=repo,
+        capture_output=True,
+    ).returncode != 0
 
 
 def test_commit_with_historical_date_missing_file(tmp_path: Path):

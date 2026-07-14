@@ -105,11 +105,21 @@ def commit_with_historical_date(
     """Stage and commit files with GIT_AUTHOR_DATE/GIT_COMMITTER_DATE set."""
     repo_dir = Path(repo_dir)
     rel_paths = _relative_paths(repo_dir, file_paths)
-    missing = [
-        str(repo_dir / p)
-        for p in rel_paths
-        if not (repo_dir / p).exists() and not file_is_tracked(repo_dir, p)
-    ]
+    existing_paths: list[Path] = []
+    tracked_deletions: list[Path] = []
+    missing: list[str] = []
+    for path in rel_paths:
+        if (repo_dir / path).exists():
+            existing_paths.append(path)
+        elif file_is_tracked(repo_dir, path):
+            tracked_deletions.append(path)
+        else:
+            try:
+                already_staged = file_has_changes(repo_dir, [path])
+            except RuntimeError:
+                already_staged = False
+            if not already_staged:
+                missing.append(str(repo_dir / path))
     if missing:
         logger.error("File not found: %s", ", ".join(missing))
         return False
@@ -133,7 +143,10 @@ def commit_with_historical_date(
         logger.info("Committed empty revision date=%s", env["GIT_AUTHOR_DATE"])
         return True
 
-    _run_git("add", "--", *[str(p) for p in rel_paths], cwd=repo_dir)
+    if existing_paths:
+        _run_git("add", "--", *[str(p) for p in existing_paths], cwd=repo_dir)
+    if tracked_deletions:
+        _run_git("add", "-u", "--", *[str(p) for p in tracked_deletions], cwd=repo_dir)
     if not file_has_changes(repo_dir, rel_paths):
         logger.info("No changes for %s, skipping", ", ".join(str(p) for p in rel_paths))
         return False
