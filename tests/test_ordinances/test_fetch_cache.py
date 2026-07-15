@@ -258,3 +258,56 @@ def test_main_exits_when_detail_fetch_has_errors(monkeypatch):
 
     with pytest.raises(SystemExit, match="ordinance detail fetch failed: errors=1"):
         fetch_cache.main()
+
+
+def test_main_recovers_failed_details_after_batch(monkeypatch):
+    entry = {"자치법규ID": "1", "자치법규일련번호": "mst-1"}
+    failed = Counter()
+    failed.inc("errors")
+    recovered = Counter()
+    recovered.inc("fetched")
+    fetch_calls = []
+
+    monkeypatch.setattr(sys, "argv", ["ordinances.fetch_cache", "--skip-quota-check"])
+    monkeypatch.setattr(
+        fetch_cache,
+        "fetch_all_current",
+        lambda types, org="", sborg="", display=100, max_entries=None, history=False, list_workers=1: [entry],
+    )
+    monkeypatch.setattr(fetch_cache, "missing_detail_entries", lambda entries: list(entries))
+
+    def fake_fetch_details(entries, workers, limit):
+        fetch_calls.append(list(entries))
+        return failed if len(fetch_calls) == 1 else recovered
+
+    monkeypatch.setattr(fetch_cache, "fetch_details", fake_fetch_details)
+
+    fetch_cache.main()
+
+    assert fetch_calls == [[entry], [entry]]
+
+
+def test_main_exits_when_recovery_pass_still_has_errors(monkeypatch):
+    entry = {"자치법규ID": "1", "자치법규일련번호": "mst-1"}
+    failed = Counter()
+    failed.inc("errors")
+    fetch_calls = []
+
+    monkeypatch.setattr(sys, "argv", ["ordinances.fetch_cache", "--skip-quota-check"])
+    monkeypatch.setattr(
+        fetch_cache,
+        "fetch_all_current",
+        lambda types, org="", sborg="", display=100, max_entries=None, history=False, list_workers=1: [entry],
+    )
+    monkeypatch.setattr(fetch_cache, "missing_detail_entries", lambda entries: list(entries))
+
+    def fake_fetch_details(entries, workers, limit):
+        fetch_calls.append(list(entries))
+        return failed
+
+    monkeypatch.setattr(fetch_cache, "fetch_details", fake_fetch_details)
+
+    with pytest.raises(SystemExit, match="ordinance detail fetch failed: errors=1"):
+        fetch_cache.main()
+
+    assert fetch_calls == [[entry], [entry]]

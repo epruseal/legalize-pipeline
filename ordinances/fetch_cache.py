@@ -356,6 +356,23 @@ def main() -> None:
     cached, fetched, errors = counter.snapshot()
     known = counter.snapshot_all().get("known_failures", 0)
     no_result = counter.snapshot_all().get("no_result", 0)
+    if errors:
+        recovery_entries = missing_detail_entries(fetch_entries)
+        if recovery_entries:
+            logger.warning(
+                "retrying ordinance detail recovery pass: unresolved=%s",
+                len(recovery_entries),
+            )
+            if not args.skip_quota_check:
+                ensure_headroom(expected_requests=len(recovery_entries), corpus="ordinances")
+            recovery = fetch_details(recovery_entries, workers=args.workers, limit=args.limit)
+            recovery_stats = recovery.snapshot_all()
+            logger.info("ordinance detail recovery done: %s", recovery_stats)
+            cached += recovery_stats["cached"]
+            fetched += recovery_stats["fetched"]
+            errors = recovery_stats["errors"]
+            known += recovery_stats.get("known_failures", 0)
+            no_result += recovery_stats.get("no_result", 0)
     logger.info(
         "ordinance fetch done: cached=%s fetched=%s no_result=%s known_failures=%s errors=%s",
         cached,
