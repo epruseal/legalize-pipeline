@@ -6,9 +6,9 @@ on:
   workflow_dispatch:
     inputs:
       ordinance_max_new_details:
-        description: 'Maximum missing ordinance details to fetch (scheduled default: 50000)'
+        description: 'Maximum missing ordinance details to fetch (scheduled default: 20000)'
         required: false
-        default: '50000'
+        default: '20000'
         type: string
 
 permissions:
@@ -24,7 +24,7 @@ env:
   LEGALIZE_KR_REPO: ${{ github.workspace }}/LEGALIZE-KR-WORKSPACE-ROOT/legalize-kr
   PIPELINE_REPO: ${{ github.workspace }}/LEGALIZE-KR-WORKSPACE-ROOT/legalize-pipeline
   LAW_API_DAILY_BUDGET: '300000'
-  ORDINANCE_MAX_NEW_DETAILS: ${{ inputs.ordinance_max_new_details || '50000' }}
+  ORDINANCE_MAX_NEW_DETAILS: ${{ inputs.ordinance_max_new_details || '20000' }}
 
 jobs:
   refresh:
@@ -114,7 +114,7 @@ jobs:
         run: |
           . "$WORKSPACE_ROOT/.venv/bin/activate"
           # Preserve legacy ID-key files, seed current serials under history/,
-          # and resume at most 50k missing historical details per daily run.
+          # and resume at most 20k missing historical details per scheduled run.
           python -m ordinances.fetch_cache --history --display 500 --max-new-details "$ORDINANCE_MAX_NEW_DETAILS"
 
       - name: Cache size summary

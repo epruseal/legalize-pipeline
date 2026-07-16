@@ -15,12 +15,12 @@ def test_daily_cache_refresh_resumes_bounded_ordinance_history_backfill():
     workflow = yaml.load(text, Loader=yaml.BaseLoader)
     assert workflow["env"]["LAW_API_DAILY_BUDGET"] == "300000"
     assert workflow["env"]["ORDINANCE_MAX_NEW_DETAILS"] == (
-        "${{ inputs.ordinance_max_new_details || '50000' }}"
+        "${{ inputs.ordinance_max_new_details || '20000' }}"
     )
     ordinance_input = workflow["on"]["workflow_dispatch"]["inputs"][
         "ordinance_max_new_details"
     ]
-    assert ordinance_input["default"] == "50000"
+    assert ordinance_input["default"] == "20000"
     assert (
         'python -m ordinances.fetch_cache --history --display 500 --max-new-details "$ORDINANCE_MAX_NEW_DETAILS"'
         in text
