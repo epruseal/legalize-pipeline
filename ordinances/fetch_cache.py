@@ -205,15 +205,16 @@ def _fetch_detail_task(
         logger.exception("No ordinance detail ID=%s", ordinance_id)
         append_failure({"자치법규ID": ordinance_id, "자치법규일련번호": "", "reason": "detail_fetch_failed"})
         counter.inc("errors")
-    except requests.HTTPError as exc:
-        if ordinance_mst and exc.response is not None and exc.response.status_code == 404:
+    except Exception as exc:
+        if (
+            isinstance(exc, requests.HTTPError)
+            and ordinance_mst
+            and exc.response is not None
+            and exc.response.status_code == 404
+        ):
             cache.add_no_result_serial(ordinance_mst)
             counter.inc("no_result")
             return
-        logger.exception("Failed ordinance detail ID=%s MST=%s", ordinance_id, ordinance_mst)
-        append_failure({"자치법규ID": ordinance_id, "자치법규일련번호": ordinance_mst, "reason": "detail_fetch_failed"})
-        counter.inc("errors")
-    except Exception as exc:
         entry = detail_failure_allowlist.accepted_entry(ordinance_mst, exc)
         if entry is not None:
             logger.warning(

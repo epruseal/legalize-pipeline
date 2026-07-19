@@ -14,11 +14,21 @@ def load_allowlist() -> dict[str, dict]:
     if not _DEFAULT_PATH.exists():
         return {}
     data = yaml.safe_load(_DEFAULT_PATH.read_text(encoding="utf-8")) or {}
-    return {
-        str(entry["serial"]): entry
-        for entry in data.get("entries", [])
-        if isinstance(entry, dict) and entry.get("serial")
-    }
+    allowlist = {}
+    for entry in data.get("entries", []):
+        if not isinstance(entry, dict):
+            continue
+        serials = entry.get("serials", [entry.get("serial")])
+        if not isinstance(serials, list):
+            continue
+        for serial in serials:
+            if serial:
+                normalized = str(serial)
+                allowlist[normalized] = {
+                    key: value for key, value in entry.items() if key != "serials"
+                }
+                allowlist[normalized]["serial"] = normalized
+    return allowlist
 
 
 def is_listed(serial: str, today: date | None = None) -> bool:

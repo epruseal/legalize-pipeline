@@ -1,4 +1,5 @@
 from datetime import date
+from xml.etree import ElementTree
 
 from ordinances import detail_failure_allowlist
 
@@ -25,3 +26,29 @@ def test_known_http_500_details_are_expiring_and_error_specific():
         assert detail_failure_allowlist.accepted_entry(
             serial, RuntimeError("404 Client Error"), today=date(2026, 7, 12)
         ) is None
+
+
+def test_repeated_upstream_failures_are_grouped_and_expiring():
+    detail_failure_allowlist.load_allowlist.cache_clear()
+
+    malformed = detail_failure_allowlist.accepted_entry(
+        "478868",
+        ElementTree.ParseError("not well-formed (invalid token): line 1, column 1"),
+        today=date(2026, 7, 18),
+    )
+    missing = detail_failure_allowlist.accepted_entry(
+        "813696",
+        RuntimeError("invalid 자치법규일련번호=<missing>"),
+        today=date(2026, 7, 18),
+    )
+    upstream_500 = detail_failure_allowlist.accepted_entry(
+        "899529",
+        RuntimeError("500 Server Error: Internal Server Error"),
+        today=date(2026, 7, 18),
+    )
+
+    assert malformed is not None and malformed["reason"] == "upstream_malformed_xml"
+    assert missing is not None and missing["reason"] == "upstream_missing_serial"
+    assert upstream_500 is not None and upstream_500["reason"] == "upstream_http_500"
+    assert not detail_failure_allowlist.is_listed("1124911", today=date(2026, 7, 18))
+    assert not detail_failure_allowlist.is_listed("478868", today=date(2026, 10, 31))

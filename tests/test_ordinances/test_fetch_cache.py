@@ -191,6 +191,34 @@ def test_fetch_details_records_history_404_as_no_result(monkeypatch):
     assert recorded == [(1, "ordinances")]
 
 
+def test_fetch_details_accepts_allowlisted_http_error(monkeypatch):
+    failures = []
+
+    def raise_500(ordinance_id, mst="", on_request_attempt=None):
+        on_request_attempt()
+        response = requests.Response()
+        response.status_code = 500
+        raise requests.HTTPError("500 Server Error: Internal Server Error", response=response)
+
+    monkeypatch.setattr(fetch_cache.cache, "get_detail", lambda cache_key, **kwargs: None)
+    monkeypatch.setattr(fetch_cache, "get_ordinance_detail", raise_500)
+    monkeypatch.setattr(fetch_cache, "append_failure", lambda row: failures.append(row))
+    monkeypatch.setattr(fetch_cache, "record_requests", lambda count, corpus: None)
+
+    counter = fetch_cache.fetch_details(
+        [{"자치법규ID": "2050384", "자치법규일련번호": "899529"}],
+        workers=1,
+    )
+
+    assert counter.snapshot_all() == {
+        "cached": 0,
+        "fetched": 0,
+        "errors": 0,
+        "known_failures": 1,
+    }
+    assert failures == []
+
+
 def test_fetch_details_records_history_no_result_xml(monkeypatch):
     no_results = []
 

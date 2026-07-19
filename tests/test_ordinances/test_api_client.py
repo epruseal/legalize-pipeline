@@ -10,6 +10,20 @@ class Response:
         self.content = content
 
 
+def test_request_retries_404_by_default(monkeypatch):
+    options = {}
+
+    def fake_make_request(url, params, **kwargs):
+        options.update(kwargs)
+        return Response(b"<ok />")
+
+    monkeypatch.setattr(api_client, "make_request", fake_make_request)
+
+    api_client._request("https://example.test/lawSearch.do", {})
+
+    assert options["non_retry_statuses"] == ()
+
+
 def test_search_ordinances_parses_list(monkeypatch):
     xml = """
     <LawSearch>
@@ -51,8 +65,10 @@ def test_search_ordinances_sends_date_range(monkeypatch):
 def test_get_ordinance_detail_fetches_and_caches(monkeypatch):
     calls = []
 
-    def fake_request(url, params, *, on_attempt=None):
+    def fake_request(url, params, *, on_attempt=None, timeout=30, non_retry_statuses=()):
         assert on_attempt is None
+        assert timeout == 120
+        assert non_retry_statuses == {404}
         assert url.endswith("/lawService.do")
         assert params["target"] == "ordin"
         assert params["ID"] == "2000111"
@@ -76,8 +92,10 @@ def test_get_ordinance_detail_fetches_and_caches(monkeypatch):
 def test_get_ordinance_detail_prefers_mst_when_available(monkeypatch):
     calls = []
 
-    def fake_request(url, params, *, on_attempt=None):
+    def fake_request(url, params, *, on_attempt=None, timeout=30, non_retry_statuses=()):
         assert on_attempt is None
+        assert timeout == 120
+        assert non_retry_statuses == {404}
         assert url.endswith("/lawService.do")
         assert params["target"] == "ordin"
         assert params["MST"] == "1805167"

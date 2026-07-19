@@ -1,7 +1,7 @@
 """Thin wrapper around law.go.kr target=ordin endpoints."""
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from xml.etree import ElementTree
 
 import requests
@@ -10,7 +10,15 @@ from core.http import make_request
 from core.throttle import Throttle
 
 from . import cache
-from .config import BACKOFF_BASE_SECONDS, LAW_API_BASE, LAW_API_KEY, MAX_RETRIES, REQUEST_DELAY_SECONDS, TYPE_CODES
+from .config import (
+    BACKOFF_BASE_SECONDS,
+    DETAIL_REQUEST_TIMEOUT_SECONDS,
+    LAW_API_BASE,
+    LAW_API_KEY,
+    MAX_RETRIES,
+    REQUEST_DELAY_SECONDS,
+    TYPE_CODES,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +34,8 @@ def _request(
     params: dict,
     *,
     on_attempt: Callable[[], None] | None = None,
+    timeout: float = 30,
+    non_retry_statuses: Collection[int] = (),
 ) -> requests.Response:
     return make_request(
         url,
@@ -34,8 +44,9 @@ def _request(
         api_key=LAW_API_KEY,
         max_retries=MAX_RETRIES,
         backoff_base=BACKOFF_BASE_SECONDS,
-        non_retry_statuses={404},
+        non_retry_statuses=non_retry_statuses,
         on_attempt=on_attempt,
+        timeout=timeout,
     )
 
 
@@ -117,6 +128,8 @@ def get_ordinance_detail(
         f"{LAW_API_BASE}/lawService.do",
         params,
         on_attempt=on_request_attempt,
+        timeout=DETAIL_REQUEST_TIMEOUT_SECONDS,
+        non_retry_statuses={404},
     )
     root = ElementTree.fromstring(resp.content)
     _require_no_api_error(root, f"ordin detail ID={ordinance_id}")

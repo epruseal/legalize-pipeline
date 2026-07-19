@@ -27,6 +27,27 @@ def test_make_request_success():
     assert resp.content == b"<ok/>"
 
 
+def test_make_request_uses_configured_timeout(monkeypatch):
+    response = MagicMock(status_code=200)
+    response.raise_for_status.return_value = None
+    get = MagicMock(return_value=response)
+    monkeypatch.setattr("core.http.requests.get", get)
+
+    make_request(
+        TEST_URL,
+        {"target": "law"},
+        throttle=_throttle(),
+        api_key="testkey",
+        timeout=120,
+    )
+
+    get.assert_called_once_with(
+        TEST_URL,
+        params={"target": "law", "OC": "testkey"},
+        timeout=120,
+    )
+
+
 @responses_lib.activate
 def test_make_request_adds_api_key():
     """OC parameter is injected automatically."""

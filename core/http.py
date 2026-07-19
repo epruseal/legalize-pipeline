@@ -22,6 +22,7 @@ def make_request(
     backoff_base: float = 2.0,
     non_retry_statuses: Collection[int] = (),
     on_attempt: Callable[[], None] | None = None,
+    timeout: float = 30,
 ) -> requests.Response:
     """Make a throttled HTTP GET with retry and exponential backoff."""
     params["OC"] = api_key
@@ -31,7 +32,7 @@ def make_request(
         try:
             if on_attempt is not None:
                 on_attempt()
-            resp = requests.get(url, params=params, timeout=30)
+            resp = requests.get(url, params=params, timeout=timeout)
             if resp.status_code == 429:
                 wait = backoff_base * (2 ** attempt) + random.uniform(0, backoff_base)
                 logger.warning(f"Rate limited (429). Waiting {wait}s before retry.")
