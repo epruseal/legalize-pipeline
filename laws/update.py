@@ -13,6 +13,7 @@ Usage (from legalize-pipeline root):
 import argparse
 import logging
 import subprocess
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 import yaml
@@ -29,14 +30,25 @@ from .converter import (
     law_to_markdown,
     reset_path_registry,
 )
-from .git_engine import commit_law
+from .git_engine import commit_law, commit_law_changes
 from core.git_engine import commit_exists
 from .import_laws import build_commit_msg
 
 logger = logging.getLogger(__name__)
 
 
-def _markdown_law_id(md_file) -> str | None:
+@dataclass(frozen=True)
+class _CurrentLawSnapshot:
+    """Current result-tree state preserved while older MSTs are backfilled."""
+
+    law_name: str
+    law_type: str
+    path: str
+    content: str
+    sort_key: tuple[str, str, int, int]
+
+
+def _markdown_frontmatter(md_file) -> dict | None:
     try:
         text = md_file.read_text(encoding="utf-8")
     except OSError:
@@ -51,9 +63,109 @@ def _markdown_law_id(md_file) -> str | None:
         fm = yaml.safe_load(yaml_str)
     except yaml.YAMLError:
         return None
-    if isinstance(fm, dict):
-        return str(fm.get("법령ID", ""))
-    return None
+    return fm if isinstance(fm, dict) else None
+
+
+def _markdown_law_id(md_file) -> str | None:
+    fm = _markdown_frontmatter(md_file)
+    return str(fm.get("법령ID", "")) if fm is not None else None
+
+
+def _metadata_sort_key(meta: dict) -> tuple[str, str, int, int]:
+    prom_date = str(meta.get("공포일자", "")).replace("-", "")
+    law_name = str(meta.get("법령명한글", meta.get("제목", "")))
+    return entry_sort_key(
+        prom_date,
+        law_name,
+        str(meta.get("공포번호", "")),
+        str(meta.get("법령MST", "")),
+    )
+
+
+def _remember_newer_current_law(
+    meta: dict,
+    snapshots: dict[str, _CurrentLawSnapshot],
+) -> tuple[str, str, int, int]:
+    """Preserve a newer current file before an older history MST overwrites it."""
+
+    candidate_key = _metadata_sort_key(meta)
+    law_id = str(meta.get("법령ID", ""))
+    if not law_id or law_id in snapshots:
+        return candidate_key
+
+    law_name = str(meta.get("법령명한글", ""))
+    law_type = str(meta.get("법령구분", ""))
+    existing_path = _find_existing_path_for_law_id(law_name, law_type, law_id)
+    if not existing_path:
+        return candidate_key
+
+    existing_file = KR_DIR.parent / existing_path
+    existing_meta = _markdown_frontmatter(existing_file)
+    if existing_meta is None or _metadata_sort_key(existing_meta) <= candidate_key:
+        return candidate_key
+
+    snapshots[law_id] = _CurrentLawSnapshot(
+        law_name=str(existing_meta.get("제목", law_name)),
+        law_type=str(existing_meta.get("법령구분", law_type)),
+        path=existing_path,
+        content=existing_file.read_text(encoding="utf-8"),
+        sort_key=_metadata_sort_key(existing_meta),
+    )
+    logger.info(
+        "Preserving newer current state for law_id=%s while backfilling MST=%s",
+        law_id,
+        meta.get("법령MST", ""),
+    )
+    return candidate_key
+
+
+def _restore_newer_current_laws(
+    snapshots: dict[str, _CurrentLawSnapshot],
+    date: str,
+) -> bool:
+    """Restore current law files after older history commits have been appended."""
+
+    changed_paths: list[str] = []
+    for law_id, snapshot in sorted(snapshots.items()):
+        current_path = _find_existing_path_for_law_id(
+            snapshot.law_name,
+            snapshot.law_type,
+            law_id,
+        )
+        original_abs = KR_DIR.parent / snapshot.path
+        if current_path and current_path != snapshot.path:
+            original_abs.parent.mkdir(parents=True, exist_ok=True)
+            if original_abs.exists():
+                subprocess.run(
+                    ["git", "rm", "--force", current_path],
+                    cwd=KR_DIR.parent,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+            else:
+                subprocess.run(
+                    ["git", "mv", "-f", current_path, snapshot.path],
+                    cwd=KR_DIR.parent,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+
+        original_abs.parent.mkdir(parents=True, exist_ok=True)
+        original_abs.write_text(snapshot.content, encoding="utf-8")
+        changed_paths.append(snapshot.path)
+        if current_path:
+            changed_paths.append(current_path)
+
+    unique_paths = list(dict.fromkeys(changed_paths))
+    if not unique_paths:
+        return False
+    return commit_law_changes(
+        unique_paths,
+        "chore(laws): 과거 이력 백필 후 최신 상태 복원",
+        date,
+    )
 
 
 def _find_existing_path_for_law_id(law_name: str, law_type: str, law_id: str) -> str | None:
@@ -310,12 +422,17 @@ def update(
 
     committed = 0
     errors = 0
+    # Missing historical commits are appended to the current branch rather
+    # than inserted chronologically. Preserve a newer HEAD state so an older
+    # backfill cannot become the published law body after the loop finishes.
+    current_snapshots: dict[str, _CurrentLawSnapshot] = {}
 
     for i, law in enumerate(new_laws, 1):
         mst = law["법령일련번호"]
         name = law.get("법령명한글", "")
 
         file_path = None
+        candidate_key = None
         try:
             # A matching MST commit is immutable. Check before resolving paths or
             # rewriting Markdown so duplicate search results cannot leave dirty,
@@ -338,6 +455,8 @@ def update(
 
             fetched_name = meta.get("법령명한글", name)
             law_id = meta.get("법령ID", "")
+            if not dry_run:
+                candidate_key = _remember_newer_current_law(meta, current_snapshots)
             file_path, extra_commit_paths = _resolve_write_path_for_law(
                 fetched_name,
                 law_type,
@@ -375,6 +494,13 @@ def update(
             if result:
                 mark_processed(mst)
                 committed += 1
+                snapshot = current_snapshots.get(str(law_id))
+                if (
+                    snapshot is not None
+                    and candidate_key is not None
+                    and candidate_key >= snapshot.sort_key
+                ):
+                    current_snapshots.pop(str(law_id), None)
                 logger.info(f"  [{i}/{len(new_laws)}] Committed MST={mst} {prom_date} {fetched_name}")
 
         except ValueError as e:  # empty body (P1)
@@ -399,6 +525,14 @@ def update(
 
         if i % 50 == 0:
             logger.info(f"Progress: {i}/{len(new_laws)} (committed={committed}, errors={errors})")
+
+    if not dry_run and current_snapshots:
+        restored = _restore_newer_current_laws(current_snapshots, format_date(today))
+        logger.info(
+            "Restored %s newer current law states after historical backfill (committed=%s)",
+            len(current_snapshots),
+            restored,
+        )
 
     if not dry_run:
         set_last_update(format_date(today))
