@@ -79,8 +79,14 @@ def test_newest_cache_refresh_failures_are_quarantined():
     missing_error = RuntimeError("invalid 자치법규일련번호=<missing>")
 
     for serial in (
+        "669643",
+        "672797",
+        "685898",
         "692085",
+        "693438",
         "701762",
+        "704067",
+        "704068",
         "722942",
         "729362",
         "729365",

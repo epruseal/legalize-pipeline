@@ -213,3 +213,15 @@ entries:
     reason: "upstream_malformed_xml"
     expected_error: "mismatched tag"
     expires_on: "2026-10-31"
+  # Reproduced during both the initial fetch and recovery pass in Daily Cache
+  # Refresh run 29908787265. These responses omit the requested serial.
+  - serials:
+      - "669643"
+      - "672797"
+      - "685898"
+      - "693438"
+      - "704067"
+      - "704068"
+    reason: "upstream_missing_serial"
+    expected_error: "invalid 자치법규일련번호=<missing>"
+    expires_on: "2026-10-31"
