@@ -22,6 +22,7 @@ GWANGYEOK = frozenset({
     "경상남도",
     "제주특별자치도",
     "충청광역연합",
+    "전남광주통합특별시",
 })
 
 HANJA_ALIAS = {
