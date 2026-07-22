@@ -190,3 +190,26 @@ entries:
     reason: "upstream_http_500"
     expected_error: "500 Server Error"
     expires_on: "2026-10-31"
+  # Reproduced during both the initial fetch and recovery pass in Daily Cache
+  # Refresh run 29845002668. These responses omit the requested serial.
+  - serials:
+      - "692085"
+      - "701762"
+      - "722942"
+      - "729362"
+      - "729365"
+      - "729366"
+      - "733015"
+      - "737279"
+      - "1174287"
+      - "1174290"
+      - "1174298"
+    reason: "upstream_missing_serial"
+    expected_error: "invalid 자치법규일련번호=<missing>"
+    expires_on: "2026-10-31"
+  # Reproduced during both passes of the same run. lawService.do returns
+  # malformed XML with mismatched tags for this serial.
+  - serial: "2000603"
+    reason: "upstream_malformed_xml"
+    expected_error: "mismatched tag"
+    expires_on: "2026-10-31"

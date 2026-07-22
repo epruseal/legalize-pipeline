@@ -11,6 +11,7 @@ permissions:
 concurrency:
   group: workspace-cache
   cancel-in-progress: false
+  queue: max
 
 env:
   WORKSPACE_ROOT: ${{ github.workspace }}/LEGALIZE-KR-WORKSPACE-ROOT

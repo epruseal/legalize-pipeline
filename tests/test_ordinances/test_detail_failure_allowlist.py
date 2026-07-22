@@ -72,3 +72,35 @@ def test_latest_repeated_upstream_failures_are_quarantined():
     )
     assert upstream_500 is not None
     assert upstream_500["reason"] == "upstream_http_500"
+
+
+def test_newest_cache_refresh_failures_are_quarantined():
+    detail_failure_allowlist.load_allowlist.cache_clear()
+    missing_error = RuntimeError("invalid 자치법규일련번호=<missing>")
+
+    for serial in (
+        "692085",
+        "701762",
+        "722942",
+        "729362",
+        "729365",
+        "729366",
+        "733015",
+        "737279",
+        "1174287",
+        "1174290",
+        "1174298",
+    ):
+        entry = detail_failure_allowlist.accepted_entry(
+            serial, missing_error, today=date(2026, 7, 22)
+        )
+        assert entry is not None
+        assert entry["reason"] == "upstream_missing_serial"
+
+    malformed = detail_failure_allowlist.accepted_entry(
+        "2000603",
+        ElementTree.ParseError("mismatched tag: line 1, column 320"),
+        today=date(2026, 7, 22),
+    )
+    assert malformed is not None
+    assert malformed["reason"] == "upstream_malformed_xml"

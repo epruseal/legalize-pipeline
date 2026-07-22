@@ -5,6 +5,22 @@ from pathlib import Path
 import yaml
 
 
+def test_cache_workflows_preserve_all_pending_runs():
+    paths = (
+        ".github/workflows/daily-laws-update.yml",
+        ".github/workflows/daily-precedent-update.yml",
+        ".github/workflows/daily-admrule-update.yml",
+        ".github/workflows/daily-ordinance-update.yml",
+        ".github/workflows/daily-cache-refresh.yml",
+        ".github/workflows/weekly-cache-release.yml",
+    )
+    for path in paths:
+        workflow = yaml.load(Path(path).read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+        assert workflow["concurrency"]["group"] == "workspace-cache"
+        assert workflow["concurrency"]["cancel-in-progress"] == "false"
+        assert workflow["concurrency"]["queue"] == "max"
+
+
 def test_daily_cache_refresh_resumes_bounded_ordinance_history_backfill():
     text = Path(".github/workflows/daily-cache-refresh.yml").read_text(encoding="utf-8")
 
