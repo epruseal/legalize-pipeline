@@ -39,6 +39,13 @@ logger = logging.getLogger(__name__)
 # Commit message builder
 # ---------------------------------------------------------------------------
 
+def _as_int(value: str) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 class VersionTracker:
     """Keeps HEAD pointing at each file's newest law version.
 
@@ -50,8 +57,19 @@ class VersionTracker:
     """
 
     def __init__(self) -> None:
-        self.newest: dict[str, tuple[str, str]] = {}
-        self.current: dict[str, tuple[str, str]] = {}
+        # file_path -> (공포일자, 공포번호, MST)
+        self.newest: dict[str, tuple[str, str, str]] = {}
+        self.current: dict[str, tuple[str, str, str]] = {}
+
+    @staticmethod
+    def _order(version: tuple[str, str, str]) -> tuple[str, int, int]:
+        """Rank a version the same way the canonical ingestion sort does.
+
+        Same-day amendments are ordered by 공포번호 then MST, so a same-date
+        backfill no longer reads as "not a regression".
+        """
+        prom, num, mst = version
+        return (prom, _as_int(num), _as_int(mst))
 
     def seen(self, file_path: str) -> None:
         """Seed a file's baseline from HEAD the first time it is touched."""
@@ -63,19 +81,23 @@ class VersionTracker:
             self.current[file_path] = head
 
     def committed(self, file_path: str, meta: dict, mst: str) -> None:
-        prom = (meta.get("공포일자", "") or "").replace("-", "")
-        self.current[file_path] = (prom, str(mst))
+        version = (
+            (meta.get("공포일자", "") or "").replace("-", ""),
+            str(meta.get("공포번호", "") or ""),
+            str(mst),
+        )
+        self.current[file_path] = version
         known = self.newest.get(file_path)
-        if known is None or prom > known[0]:
-            self.newest[file_path] = (prom, str(mst))
+        if known is None or self._order(version) > self._order(known):
+            self.newest[file_path] = version
 
     def regressed(self) -> list[tuple[str, str, str]]:
         """(file_path, newest_mst, held_공포일자) for files left behind."""
         out = []
-        for path, (want_prom, want_mst) in sorted(self.newest.items()):
+        for path, want in sorted(self.newest.items()):
             have = self.current.get(path)
-            if have is not None and have[0] < want_prom:
-                out.append((path, want_mst, have[0]))
+            if have is not None and self._order(have) < self._order(want):
+                out.append((path, want[2], have[0]))
         return out
 
     def restore(self) -> int:
@@ -195,6 +217,7 @@ def import_law_with_history(
     processed = get_processed_msts()
     committed = 0
     errors = 0
+    tracker = VersionTracker()
 
     for i, entry in enumerate(history, 1):
         mst = entry["법령일련번호"]
@@ -215,6 +238,8 @@ def import_law_with_history(
             law_id = meta.get("법령ID", "")
             file_path = get_law_path(fetched_name, law_type_name, law_id)
             abs_path = KR_DIR.parent / file_path
+            if not dry_run:
+                tracker.seen(file_path)
 
             # Merge history metadata into detail metadata
             meta["제개정구분"] = entry.get("제개정구분명", meta.get("제개정구분", ""))
@@ -240,8 +265,11 @@ def import_law_with_history(
 
             result = commit_law(file_path, commit_msg, prom_date, mst)
             if result:
+                from .failures import clear_failed
                 mark_processed(mst)
+                clear_failed(mst)
                 committed += 1
+                tracker.committed(file_path, meta, mst)
                 logger.info(f"  [{i}/{len(history)}] Committed MST={mst} {prom_date} {amendment}")
 
         except ValueError as e:  # empty body (P1)
@@ -264,7 +292,11 @@ def import_law_with_history(
                         step="import_law_with_history", law_name=law_name)
             errors += 1
 
-    logger.info(f"History import for {law_name}: committed={committed}, errors={errors}")
+    restored = tracker.restore() if not dry_run else 0
+    logger.info(
+        f"History import for {law_name}: committed={committed}, "
+        f"restored={restored}, errors={errors}"
+    )
     return committed
 
 
@@ -573,6 +605,7 @@ def import_from_csv(
         laws = laws[:limit]
 
     committed = 0
+    tracker = VersionTracker()
     for i, law in enumerate(laws, 1):
         mst = law["법령MST"]
         name = law["법령명"]
@@ -587,6 +620,7 @@ def import_from_csv(
                 logger.info(f"[DRY-RUN] {file_path}")
                 continue
 
+            tracker.seen(file_path)
             abs_path.parent.mkdir(parents=True, exist_ok=True)
             abs_path.write_text(build_csv_markdown(law), encoding="utf-8")
 
@@ -596,8 +630,11 @@ def import_from_csv(
                 date = "2000-01-01"
 
             if commit_law(file_path, commit_msg, date, mst):
+                from .failures import clear_failed
                 mark_processed(mst)
+                clear_failed(mst)
                 committed += 1
+                tracker.committed(file_path, law, mst)
         except ValueError as e:  # empty body (P1)
             from .failures import log_failure, mark_failed, mark_failed_and_quarantine
             log_failure("import_from_csv", str(mst), name, e)
@@ -619,7 +656,8 @@ def import_from_csv(
         if i % 100 == 0:
             logger.info(f"Progress: {i}/{len(laws)} (committed={committed})")
 
-    logger.info(f"CSV import done: committed={committed}")
+    restored = tracker.restore() if not dry_run else 0
+    logger.info(f"CSV import done: committed={committed}, restored={restored}")
     return committed
 
 

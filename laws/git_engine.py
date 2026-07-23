@@ -10,11 +10,12 @@ def _run_git(*args: str, env: dict | None = None) -> str:
     return _core_run_git(*args, cwd=LAW_REPO, env=env)
 
 
-def head_law_version(file_path: str) -> tuple[str, str] | None:
-    """(공포일자, 법령MST) of ``file_path`` as committed at HEAD, or None.
+def head_law_version(file_path: str) -> tuple[str, str, str] | None:
+    """(공포일자, 공포번호, 법령MST) of ``file_path`` at HEAD, or None.
 
     공포일자 comes back without separators (YYYYMMDD) so it orders directly
-    against the raw API value.
+    against the raw API value. 공포번호 is the tie-breaker for same-day
+    amendments, matching the canonical ingestion order.
     """
     try:
         blob = _run_git("show", f"HEAD:{file_path}")
@@ -24,7 +25,12 @@ def head_law_version(file_path: str) -> tuple[str, str] | None:
     mst = re.search(r"^법령MST:\s*(\S+)", blob, re.M)
     if not prom or not mst:
         return None
-    return prom.group(1).replace("-", ""), mst.group(1)
+    num = re.search(r"^공포번호:\s*'?([^'\s]*)'?", blob, re.M)
+    return (
+        prom.group(1).replace("-", ""),
+        num.group(1) if num else "",
+        mst.group(1),
+    )
 
 
 def commit_law(
