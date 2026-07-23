@@ -195,7 +195,10 @@ def _fetch_detail_task(
             mst=ordinance_mst,
             on_request_attempt=quota.record_attempt,
         )
-        checkpoint.mark_detail_processed(cache_key)
+        # mark_detail_processed 를 부르지 않는다: 재개 판정은 cache.get_detail
+        # 존재 검사가 이미 담당하고, 이 호출은 매번 체크포인트(9.5MB, 65만 항목)
+        # 전체를 다시 쓰면서 전역 락을 잡아 detail 한 건당 약 0.9초를 태운다.
+        # 소비자도 없다.
         counter.inc("fetched")
     except NoResultError:
         if ordinance_mst:

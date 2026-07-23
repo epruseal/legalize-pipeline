@@ -73,7 +73,9 @@ def _fetch_detail_task(serial_no: str, counter: Counter) -> None:
     try:
         get_admrule_detail(serial_no)
         record_requests(1, corpus="admrules")
-        checkpoint.mark_detail_processed(serial_no)
+        # mark_detail_processed 를 부르지 않는다: 재개 판정은 위의 cache.get_detail
+        # 존재 검사가 이미 담당하고, 이 호출은 매번 체크포인트 전체를 다시 쓰면서
+        # 전역 락을 잡아 detail 한 건당 수백 ms 를 태운다(소비자도 없다).
         counter.inc("fetched")
     except Exception as e:
         entry = detail_failure_allowlist.accepted_entry(serial_no, e)

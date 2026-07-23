@@ -51,6 +51,8 @@ def _guard_against_shared_cache_pollution():
     / `foo법` invariant violation. This fixture snapshots the cache dirs at
     session start and diffs at teardown.
     """
+    import core.quota_budget as quota_budget
+
     import admrules.cache as adm_cache
     import admrules.checkpoint as adm_checkpoint
     import laws.cache as law_cache
@@ -71,6 +73,9 @@ def _guard_against_shared_cache_pollution():
     guarded_files: list[tuple[str, Path]] = [
         ("admrules.checkpoint.CHECKPOINT_FILE", adm_checkpoint.CHECKPOINT_FILE),
         ("ordinances.checkpoint.CHECKPOINT_FILE", ord_checkpoint.CHECKPOINT_FILE),
+        # 테스트가 실제 쿼터 원장에 허위 소비를 기록하면 그날의 수집이
+        # 가드레일에 막힐 수 있다.
+        ("core.quota_budget.STATE_FILE", quota_budget.STATE_FILE),
     ]
 
     def _snapshot_file(path: Path) -> tuple[int, int] | None:
@@ -106,6 +111,20 @@ def _guard_against_shared_cache_pollution():
             "cache-writing code paths must monkeypatch the relevant CACHE_DIR "
             "to a tmp_path. Details:\n  - " + "\n  - ".join(violations)
         )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_quota_ledger(tmp_path, monkeypatch):
+    """Keep the shared quota ledger out of every test's reach.
+
+    ``record_requests`` is reached indirectly from many crawl paths, so relying
+    on each test to stub it lets one omission write a phantom day's consumption
+    into the developer's real ledger — which can then block that day's fetch on
+    the headroom guardrail.
+    """
+    import core.quota_budget as quota_budget
+
+    monkeypatch.setattr(quota_budget, "STATE_FILE", tmp_path / "quota.json")
 
 
 @pytest.fixture

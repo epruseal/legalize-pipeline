@@ -6,7 +6,7 @@
 
 - `api_client.py` — `ordin` API 래퍼. `search_ordinances(nw=...)` 로 현행/연혁 검색 지원.
 - `cache.py` — detail XML 캐시 (`.cache/ordinance/<MST>.xml`).
-- `checkpoint.py` — 크롤 인덱스(`.cache/.ordinance-index.jsonl`) 저장·로드.
+- `checkpoint.py` — 페이지·상세 진행 체크포인트(`.cache/.ordinance-checkpoint.json`).
 - `fetch_cache.py` — 연혁 포함 전체 수집 루프. 기본 동작은 **nw=2(연혁)**.
 - `failures.py` — 조회 실패 레코드 JSONL 기록 (`.cache/ordinance_failures.jsonl`).
 - `converter.py` — XML → Markdown/frontmatter 변환.
@@ -22,8 +22,11 @@ cd legalize-pipeline
 LAW_OC=<api_key> python -m ordinances.fetch_cache --skip-quota-check --workers 40
 ```
 
-기본으로 **nw=2(연혁)** 크롤을 수행하고 nw=1(현행) union을 합친 뒤, MST(`자치법규일련번호`) 기준으로
-dedup한다. 크롤 인덱스(`.cache/.ordinance-index.jsonl`)가 있으면 재크롤 없이 detail 수집만 재개한다.
+기본으로 **nw=2(연혁)** 크롤을 수행하고 MST(`자치법규일련번호`) 기준으로 dedup한다.
+
+목록 크롤 결과 재사용은 자동이 아니라 명시적 opt-in이다 — 완전 무필터 전체 크롤일 때만
+저장되고, 재사용하려면 `--skip-list`를 직접 줘야 한다. 자동 재사용은 신설 자치법규가
+목록에서 영구히 빠지는 사고로 이어지므로 기본값이 아니다.
 
 현행본만 수집하려면:
 
