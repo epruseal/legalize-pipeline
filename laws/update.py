@@ -30,7 +30,7 @@ from .converter import (
 )
 from .git_engine import commit_law
 from core.git_engine import commit_exists
-from .import_laws import build_commit_msg
+from .import_laws import VersionTracker, build_commit_msg
 
 logger = logging.getLogger(__name__)
 
@@ -162,6 +162,8 @@ def _commit_exists_for_mst(mst: str) -> bool:
     return commit_exists(KR_DIR.parent, f"법령MST: {mst}")
 
 
+
+
 def update(
     days: int = 14,
     law_type_filter: str | None = None,
@@ -270,6 +272,8 @@ def update(
     committed = 0
     errors = 0
 
+    tracker = VersionTracker()
+
     for i, law in enumerate(new_laws, 1):
         mst = law["법령일련번호"]
         name = law.get("법령명한글", "")
@@ -292,6 +296,9 @@ def update(
                 dry_run=dry_run,
             )
             abs_path = KR_DIR.parent / file_path
+
+            if not dry_run:
+                tracker.seen(file_path)
 
             meta["제개정구분"] = law.get("제개정구분명", meta.get("제개정구분", ""))
             if not meta.get("공포번호"):
@@ -320,9 +327,12 @@ def update(
                 extra_paths=extra_commit_paths,
             )
             if result:
+                from .failures import clear_failed
                 mark_processed(mst)
+                clear_failed(mst)
                 committed += 1
                 logger.info(f"  [{i}/{len(new_laws)}] Committed MST={mst} {prom_date} {fetched_name}")
+                tracker.committed(file_path, meta, mst)
 
         except ValueError as e:  # empty body (P1)
             from .failures import log_failure, mark_failed, mark_failed_and_quarantine
@@ -347,10 +357,12 @@ def update(
         if i % 50 == 0:
             logger.info(f"Progress: {i}/{len(new_laws)} (committed={committed}, errors={errors})")
 
+    restored = 0
     if not dry_run:
+        restored = tracker.restore()
         set_last_update(format_date(today))
 
-    logger.info(f"Update done: committed={committed}, errors={errors}")
+    logger.info(f"Update done: committed={committed}, restored={restored}, errors={errors}")
     return committed
 
 

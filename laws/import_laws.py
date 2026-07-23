@@ -30,7 +30,7 @@ from .converter import (
     plan_current_law_paths,
     reset_path_registry,
 )
-from .git_engine import commit_law
+from .git_engine import commit_law, head_law_version
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +38,68 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Commit message builder
 # ---------------------------------------------------------------------------
+
+class VersionTracker:
+    """Keeps HEAD pointing at each file's newest law version.
+
+    Backfilled MSTs are older than versions committed by earlier runs, so
+    committing them overwrites the file and leaves HEAD serving stale law text
+    (the file's history keeps every version, but its tip regresses). Seed from
+    HEAD on first touch, record every commit, then restore whatever ended up
+    behind.
+    """
+
+    def __init__(self) -> None:
+        self.newest: dict[str, tuple[str, str]] = {}
+        self.current: dict[str, tuple[str, str]] = {}
+
+    def seen(self, file_path: str) -> None:
+        """Seed a file's baseline from HEAD the first time it is touched."""
+        if file_path in self.newest:
+            return
+        head = head_law_version(file_path)
+        if head:
+            self.newest[file_path] = head
+            self.current[file_path] = head
+
+    def committed(self, file_path: str, meta: dict, mst: str) -> None:
+        prom = (meta.get("공포일자", "") or "").replace("-", "")
+        self.current[file_path] = (prom, str(mst))
+        known = self.newest.get(file_path)
+        if known is None or prom > known[0]:
+            self.newest[file_path] = (prom, str(mst))
+
+    def regressed(self) -> list[tuple[str, str, str]]:
+        """(file_path, newest_mst, held_공포일자) for files left behind."""
+        out = []
+        for path, (want_prom, want_mst) in sorted(self.newest.items()):
+            have = self.current.get(path)
+            if have is not None and have[0] < want_prom:
+                out.append((path, want_mst, have[0]))
+        return out
+
+    def restore(self) -> int:
+        """Re-commit the newest version wherever HEAD regressed."""
+        restored = 0
+        for path, mst, held in self.regressed():
+            logger.warning("HEAD regressed for %s (holds %s) — restoring MST=%s", path, held, mst)
+            try:
+                detail = get_law_detail(mst)
+                meta = detail["metadata"]
+                (KR_DIR.parent / path).write_text(law_to_markdown(detail), encoding="utf-8")
+                msg = build_commit_msg(
+                    meta.get("법령명한글", ""), meta.get("법령구분", ""), mst, meta
+                )
+                prom = format_date(meta.get("공포일자", "")) or "2000-01-01"
+                if commit_law(path, msg, prom, mst, skip_dedup=True):
+                    restored += 1
+                    logger.info("  Restored MST=%s %s %s", mst, prom, path)
+            except Exception as e:
+                from .failures import log_failure
+                log_failure("restore_newest", str(mst), path, e)
+                logger.error("Restore failed for %s: %s", path, e)
+        return restored
+
 
 def build_commit_msg(law_name: str, law_type: str, mst: str, meta: dict) -> str:
     """Build a rich commit message with law.go.kr URLs and metadata."""
@@ -338,6 +400,7 @@ def import_from_cache(
 
     committed = 0
     errors = 0
+    tracker = VersionTracker()
 
     for i, (mst, detail) in enumerate(entries, 1):
         meta = detail["metadata"]
@@ -350,6 +413,8 @@ def import_from_cache(
             file_path = planned_paths.get(mst) or get_law_path(law_name, law_type, law_id)
             abs_path = KR_DIR.parent / file_path
             prom_date = format_date(meta.get("공포일자", ""))
+            if not dry_run:
+                tracker.seen(file_path)
 
             if dry_run:
                 logger.info(f"  [{i}/{len(entries)}] [DRY-RUN] MST={mst} {prom_date} {law_name} -> {file_path}")
@@ -365,8 +430,11 @@ def import_from_cache(
 
             result = commit_law(file_path, commit_msg, prom_date, mst)
             if result:
+                from .failures import clear_failed
                 mark_processed(mst)
+                clear_failed(mst)
                 committed += 1
+                tracker.committed(file_path, meta, mst)
                 logger.info(f"  [{i}/{len(entries)}] Committed MST={mst} {prom_date} {law_name}")
 
         except ValueError as e:  # empty body (P1)
@@ -392,7 +460,10 @@ def import_from_cache(
         if i % 100 == 0:
             logger.info(f"Progress: {i}/{len(entries)} (committed={committed}, errors={errors})")
 
-    logger.info(f"Cache import done: committed={committed}, errors={errors}")
+    restored = tracker.restore() if not dry_run else 0
+    logger.info(
+        f"Cache import done: committed={committed}, restored={restored}, errors={errors}"
+    )
     return committed
 
 
