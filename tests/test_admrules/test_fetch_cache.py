@@ -147,6 +147,9 @@ def test_main_exits_when_detail_fetch_has_errors(monkeypatch):
 
     monkeypatch.setattr(sys, "argv", ["admrules.fetch_cache", "--skip-quota-check"])
     monkeypatch.setattr(fetch_cache, "fetch_all_current", lambda knd_values=None, org="", max_entries=None: [])
+    # 인자 없는 실행이라 main() 이 prune_stale_cache 를 태우는데, 목록 스텁이
+    # 빈 리스트를 주므로 실제 prune_details 가 돌면 캐시 전량이 지워진다.
+    monkeypatch.setattr(fetch_cache.cache, "prune_details", lambda serials: [])
     monkeypatch.setattr(fetch_cache, "fetch_details", lambda entries, workers, limit: counter)
 
     with pytest.raises(SystemExit, match="admrule detail fetch failed: errors=1"):
