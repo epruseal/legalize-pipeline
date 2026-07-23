@@ -39,6 +39,27 @@ LAW_OC=<api_key> python -m ordinances.update
 
 `update.py`는 공포일자 범위로 신규 공포 건만 수집한다 (연혁 backfill 불필요).
 
+## 지자체 명칭 정규화
+
+`jurisdictions.py`의 `GWANGYEOK` 집합이 광역 단위 목록이고, `split_jurisdiction()`이
+`지자체기관명`을 `(광역, 기초)`로 쪼갠다. 목록에 없는 광역 명칭은
+`UnknownJurisdiction`으로 실패하며 해당 자치법규는 수집에서 탈락한다.
+
+행정구역 개편이 있으면 두 가지를 함께 반영해야 한다.
+
+- **신설 광역**: `GWANGYEOK`에 추가한다. 예) 전남·광주 통합으로 신설된
+  `전남광주통합특별시`. 누락 시 해당 지자체 전체가 탈락한다 — 2026-07-22 수집에서
+  3,704건이 이 원인으로 빠졌다.
+- **개편 전 표기**: law.go.kr은 개편 전 발령기관을 `(구)전라남도`처럼 표기한다.
+  `_normalize()`가 선두 `(구)` 접두를 떼고 옛 명칭으로 해석한다.
+
+`compiler`의 `ordinances/src/main.rs`에도 동일한 목록과 `(구)` 규칙이 있다.
+**두 구현이 어긋나면 같은 자치법규가 서로 다른 정본 경로에 놓이므로 반드시 함께 고친다.**
+
+파싱 실패는 fetch 단계가 아니라 경로 계산 단계에서 나므로 원본 XML은
+`.cache/ordinance`에 남는다. 따라서 목록을 고친 뒤에는 API 재조회 없이
+`import_from_cache(msts=[...], skip_dedup=True)`로 회수할 수 있다.
+
 ## 알려진 제한
 
 law.go.kr nw=2 검색 인덱스에 존재하지만 detail 조회가 불가능한 레코드가 일부 있다.

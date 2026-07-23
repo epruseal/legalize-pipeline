@@ -204,6 +204,38 @@ WORKSPACE_ROOT/
 - **Checkpoint**: `.cache/.checkpoint.json`의 `processed_msts` set 추적
 - **Update 모드**: checkpoint만 사용 (skip_dedup=True)
 
+## HEAD 퇴행 방지 (VersionTracker)
+
+파일에는 언제나 그 법령의 **최신 버전**이 있어야 한다. 그런데 연혁 백필로 뒤늦게
+발견된 과거 MST는 이전 실행이 이미 커밋한 최신본보다 오래됐고, 이를 커밋하면
+파일이 과거 본문으로 덮인다. 최신 MST는 위 중복 방지에 걸려 재커밋되지 않으므로
+HEAD가 구버전을 현행으로 제공하게 된다(연혁 자체는 커밋에 남는다).
+
+`VersionTracker`(`import_laws.py`)가 파일별로 HEAD 기준 최신본과 현재 보유본을
+추적하고, 루프 종료 후 뒤처진 파일에 최신본을 재커밋한다. 버전 비교는
+`(공포일자, 공포번호, MST)` 순으로, `converter.entry_sort_key`의 정본 정렬과
+같은 순서다 — 같은 날 공포된 다른 MST도 정확히 구분된다.
+
+적용 대상은 dedup 스킵이 일어날 수 있는 경로 전부다: `update`,
+`import_from_cache`, `import_law_with_history`, `import_from_csv`.
+`rebuild`는 orphan 브랜치에 정본 순서로 전량을 재생성하고 dedup 스킵이 없어
+퇴행이 구조적으로 불가능하므로 제외한다.
+
+## 실패 원장 (.failed_msts.json)
+
+파싱·변환에 실패한 MST를 기록해 재개 가능한 임포트를 지원한다. CI의
+`_ci.delta_gate`가 이 원장과 `.failure-baseline.json`을 비교해 **신규** 실패만
+보고한다.
+
+- 임포트가 성공하면 `clear_failed()`가 해당 항목을 지운다. 이게 없으면 이미
+  해소된 MST가 영구히 "신규 실패"로 보고된다.
+- 워커가 병렬로 도는 것을 전제로, 원장의 read-modify-write는 flock으로
+  프로세스 간 직렬화하고 기록은 원자적으로 한다.
+
+상류 XML이 깨져 실패한 경우는 `api_client.repair_law_xml()`이 먼저 복구를
+시도한다(미닫힌 `<조문참고자료>`). 복구본이 캐시에 저장되므로 재임포트는
+오프라인으로 동작한다.
+
 ## 환경 설정
 
 ```bash
