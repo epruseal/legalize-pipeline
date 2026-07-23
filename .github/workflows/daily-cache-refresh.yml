@@ -4,6 +4,12 @@ on:
   schedule:
     - cron: '0 14 * * *' # 23:00 KST (UTC+9)
   workflow_dispatch:
+    inputs:
+      ordinance_max_new_details:
+        description: 'Maximum missing ordinance details to fetch (scheduled default: 20000)'
+        required: false
+        default: '20000'
+        type: string
 
 permissions:
   contents: read
@@ -11,17 +17,20 @@ permissions:
 concurrency:
   group: workspace-cache
   cancel-in-progress: false
+  queue: max
 
 env:
   WORKSPACE_ROOT: ${{ github.workspace }}/LEGALIZE-KR-WORKSPACE-ROOT
   LEGALIZE_CACHE_DIR: ${{ secrets.LEGALIZE_CACHE_DIR }}
   LEGALIZE_KR_REPO: ${{ github.workspace }}/LEGALIZE-KR-WORKSPACE-ROOT/legalize-kr
   PIPELINE_REPO: ${{ github.workspace }}/LEGALIZE-KR-WORKSPACE-ROOT/legalize-pipeline
+  LAW_API_DAILY_BUDGET: '300000'
+  ORDINANCE_MAX_NEW_DETAILS: ${{ inputs.ordinance_max_new_details || '20000' }}
 
 jobs:
   refresh:
     runs-on: self-hosted
-    timeout-minutes: 240
+    timeout-minutes: 600
 
     steps:
       - name: Checkout law repo
@@ -63,18 +72,23 @@ jobs:
           ln -s "$LEGALIZE_CACHE_DIR" "$WORKSPACE_ROOT/.cache"
 
       - name: Fetch laws cache
+        id: fetch_laws
+        continue-on-error: true
         working-directory: ${{ env.PIPELINE_REPO }}
         env:
           LAW_OC: ${{ secrets.LAW_OC }}
+          LAW_API_REQUEST_DELAY_SECONDS: '0.2'
         run: |
           . "$WORKSPACE_ROOT/.venv/bin/activate"
           # --refresh-history: lsHistory 캐시를 우회하고 재조회해
           # 타법개정 등 lawSearch.do가 반환하지 않는 MST까지 포괄 수집
           # (issue #31 재발 방지). 추가 API 호출은 법령명 수만큼이며,
           # 기본 240분 타임아웃 내에 여유롭게 끝남.
-          python -m laws.fetch_cache --refresh-history
+          python -m laws.fetch_cache --refresh-history --history-name-file laws/data/history_seed_names.txt --workers 5
 
       - name: Fetch precedents cache
+        id: fetch_precedents
+        continue-on-error: true
         working-directory: ${{ env.PIPELINE_REPO }}
         env:
           LAW_OC: ${{ secrets.LAW_OC }}
@@ -82,7 +96,9 @@ jobs:
           . "$WORKSPACE_ROOT/.venv/bin/activate"
           python -m precedents.fetch_cache
 
-      - name: Fetch administrative rules cache
+      - name: Fetch administrative rules history cache
+        id: fetch_admrules
+        continue-on-error: true
         working-directory: ${{ env.PIPELINE_REPO }}
         env:
           LAW_OC: ${{ secrets.LAW_OC }}
@@ -91,56 +107,52 @@ jobs:
           python -m admrules.fetch_cache
 
       - name: Fetch ordinances cache
+        id: fetch_ordinances
+        continue-on-error: true
         working-directory: ${{ env.PIPELINE_REPO }}
         env:
           LAW_OC: ${{ secrets.LAW_OC }}
-          LAW_API_DAILY_BUDGET: 300000
         run: |
           . "$WORKSPACE_ROOT/.venv/bin/activate"
-          python -m ordinances.fetch_cache
+          # Preserve legacy ID-key files, seed current serials under history/,
+          # and resume at most 20k missing historical details per scheduled run.
+          python -m ordinances.fetch_cache --history --display 500 --max-new-details "$ORDINANCE_MAX_NEW_DETAILS"
 
       - name: Cache size summary
         working-directory: ${{ env.PIPELINE_REPO }}
         run: du -sh "$LEGALIZE_CACHE_DIR"/* | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: File-count regression gate
+        working-directory: ${{ env.PIPELINE_REPO }}
         run: |
-          baseline_file="$LEGALIZE_CACHE_DIR/.cache-baseline.json"
-          # Note: legitimate count drops can come from law repeals (detail/), _no_result_ids.txt pruning (precedent/), or upstream cache invalidation. 1% tolerance band absorbs these.
-          pass=true
-          for subdir in detail history precedent images admrule ordinance; do
-            new=$(find "$LEGALIZE_CACHE_DIR/$subdir" -type f 2>/dev/null | wc -l | tr -d ' ')
-            echo "Cache $subdir: $new files"
-            if [ -f "$baseline_file" ]; then
-              baseline=$(BASELINE_FILE="$baseline_file" SUBDIR="$subdir" python3 -c 'import json, os; d=json.load(open(os.environ["BASELINE_FILE"])); print(d.get(os.environ["SUBDIR"], 0))')
-              threshold=$(BASELINE="$baseline" python3 -c 'import os; print(int(int(os.environ["BASELINE"]) * 0.99))')
-              if [ "$new" -lt "$threshold" ]; then
-                echo "::error::Cache regression in $subdir: $new < threshold $threshold (baseline $baseline)"
-                pass=false
-              elif [ "$new" -lt "$baseline" ]; then
-                echo "::warning::Cache count dropped in $subdir: $new < baseline $baseline (within 1% tolerance)"
-              fi
-            fi
-          done
-          python3 - <<'PYTHON_EOF'
-          import json, os, subprocess, pathlib
-          counts = {}
-          for subdir in ["detail", "history", "precedent", "images", "admrule", "ordinance"]:
-              result = subprocess.run(
-                  ["find", f"{os.environ['LEGALIZE_CACHE_DIR']}/{subdir}", "-type", "f"],
-                  capture_output=True, text=True
-              )
-              counts[subdir] = len([l for l in result.stdout.splitlines() if l])
-          payload = json.dumps(counts, indent=2)
-          pathlib.Path("cache-baseline.json").write_text(payload)
-          (pathlib.Path(os.environ["LEGALIZE_CACHE_DIR"]) / ".cache-baseline.json").write_text(payload)
-          print("Wrote cache-baseline.json:", counts)
-          PYTHON_EOF
-          $pass || exit 1
+          . "$WORKSPACE_ROOT/.venv/bin/activate"
+          python -m cache.baseline --cache-dir "$LEGALIZE_CACHE_DIR" --output cache-baseline.json
 
       - name: Upload baseline artifact
         uses: actions/upload-artifact@v7
         with:
           name: cache-baseline
-          path: cache-baseline.json
+          path: ${{ env.PIPELINE_REPO }}/cache-baseline.json
           retention-days: 90
+
+      - name: Report cache fetch failures
+        if: always()
+        run: |
+          failed=0
+          if [ "${{ steps.fetch_laws.outcome }}" != "success" ]; then
+            echo "::error::Laws cache fetch failed"
+            failed=1
+          fi
+          if [ "${{ steps.fetch_precedents.outcome }}" != "success" ]; then
+            echo "::error::Precedents cache fetch failed"
+            failed=1
+          fi
+          if [ "${{ steps.fetch_admrules.outcome }}" != "success" ]; then
+            echo "::error::Administrative rules cache fetch failed"
+            failed=1
+          fi
+          if [ "${{ steps.fetch_ordinances.outcome }}" != "success" ]; then
+            echo "::error::Ordinances cache fetch failed"
+            failed=1
+          fi
+          exit "$failed"

@@ -1,6 +1,7 @@
 """Tests for precedents/fetch_cache.py."""
 
 import json
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -123,3 +124,20 @@ def test_fetch_detail_task_records_no_result(tmp_path: Path):
     assert counter.snapshot_all()["no_result"] == 1
     c, f, e = counter.snapshot()
     assert e == 0  # no_result is not an error
+
+
+def test_main_exits_when_detail_fetch_has_errors(monkeypatch):
+    fetch_cache_mod._IDS_PATH.write_text(
+        json.dumps({"ids": ["bad"], "total": 1}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(sys, "argv", ["precedents.fetch_cache", "--skip-list", "--workers", "1"])
+    monkeypatch.setattr(
+        fetch_cache_mod,
+        "_fetch_detail_task",
+        lambda prec_id, counter, no_result_ids=None: counter.inc("errors"),
+    )
+
+    with pytest.raises(SystemExit, match="precedent detail fetch failed: errors=1"):
+        fetch_cache_mod.main()

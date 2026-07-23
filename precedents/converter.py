@@ -7,6 +7,8 @@ from xml.etree import ElementTree
 
 import yaml
 
+from core.markdown import escape_accidental_markdown_links
+
 from .config import COURT_TIER_MAP, KNOWN_CASE_TYPES
 
 # Filename grammar slot separator. Composite key:
@@ -240,7 +242,7 @@ def normalize_case_name(text: str) -> str:
     text = _HTML_TAG_RE.sub("", text)
     text = html.unescape(text)
     text = _MULTI_SPACE_RE.sub(" ", text)
-    return text.strip()
+    return escape_accidental_markdown_links(text.strip())
 
 
 def html_to_markdown(text: str) -> str:
@@ -257,7 +259,7 @@ def html_to_markdown(text: str) -> str:
     text = html.unescape(text)
     text = _MULTI_BLANK_RE.sub("\n\n", text)
     text = _MULTI_SPACE_RE.sub(" ", text)
-    return text.strip()
+    return escape_accidental_markdown_links(text.strip())
 
 
 def format_date(date_str: str) -> str | None:

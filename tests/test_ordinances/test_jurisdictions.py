@@ -17,6 +17,9 @@ from ordinances.jurisdictions import UnknownJurisdiction, split_jurisdiction
         ("제주도교육청", ("제주특별자치도", "_교육청")),
         ("제주도 제주시", ("제주특별자치도", "제주시")),
         ("충청광역연합", ("충청광역연합", "_본청")),
+        ("전남광주통합특별시", ("전남광주통합특별시", "_본청")),
+        ("전남광주통합특별시 남구", ("전남광주통합특별시", "남구")),
+        ("전남광주통합특별시교육청", ("전남광주통합특별시", "_교육청")),
     ],
 )
 def test_split_jurisdiction(raw, expected):

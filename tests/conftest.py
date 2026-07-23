@@ -65,14 +65,11 @@ def _guard_against_shared_cache_pollution():
         ("admrules.cache.CACHE_DIR", adm_cache.CACHE_DIR),
         ("ordinances.cache.CACHE_DIR", ord_cache.CACHE_DIR),
     ]
-    # Crawl indexes and checkpoints are single files rather than directories,
-    # and are the ones that actually bit us: a test that skips isolating them
-    # reads 860k live entries out of the developer's `.ordinance-index.jsonl`,
-    # which is why the same suite failed 4 or 6 tests depending on the machine.
+    # Checkpoints are single files rather than directories, and are the kind of
+    # shared state that silently leaks between tests: a test that skips
+    # isolating them reads (or overwrites) the developer's live crawl state.
     guarded_files: list[tuple[str, Path]] = [
-        ("admrules.checkpoint.INDEX_FILE", adm_checkpoint.INDEX_FILE),
         ("admrules.checkpoint.CHECKPOINT_FILE", adm_checkpoint.CHECKPOINT_FILE),
-        ("ordinances.checkpoint.INDEX_FILE", ord_checkpoint.INDEX_FILE),
         ("ordinances.checkpoint.CHECKPOINT_FILE", ord_checkpoint.CHECKPOINT_FILE),
     ]
 

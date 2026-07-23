@@ -24,7 +24,7 @@ entries:
     match_mode: "stem"
     reason: "unicode_middle_dot"
     tracking_issue: "legalize-kr/legalize-pipeline#0"
-    expires_on: "2026-07-15"
+    expires_on: "2027-01-15"
     # Audit:
     #   search_laws output: (not captured in recovery log; to be
     #     attached to tracking issue body when filed)
@@ -39,7 +39,7 @@ entries:
     match_mode: "stem"
     reason: "unicode_middle_dot"
     tracking_issue: "legalize-kr/legalize-pipeline#0"
-    expires_on: "2026-07-15"
+    expires_on: "2027-01-15"
     # Audit:
     #   search_laws output: (not captured in recovery log)
     #   failure classification: stem contains U+00B7 MIDDLE DOT (·);

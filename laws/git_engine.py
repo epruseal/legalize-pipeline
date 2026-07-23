@@ -69,3 +69,21 @@ def commit_law(
         author=author or BOT_AUTHOR,
         dedup_grep_key=key,
     )
+
+
+def commit_law_changes(
+    file_paths: list[str],
+    message: str,
+    date: str,
+    *,
+    author: str | None = None,
+) -> bool:
+    """Commit a grouped law-tree maintenance change without an MST marker."""
+
+    return commit_with_historical_date(
+        LAW_REPO,
+        [Path(path) for path in file_paths],
+        message,
+        date,
+        author=author or BOT_AUTHOR,
+    )

@@ -4,12 +4,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+import requests
 import responses as responses_lib
 
 import laws.cache as law_cache
 import laws.api_client as api_client
 
-LAW_API_BASE = "http://www.law.go.kr/DRF"
+LAW_API_BASE = "https://www.law.go.kr/DRF"
 FIXTURES_DIR = Path(__file__).parent.parent / "fixtures"
 
 
@@ -48,6 +49,19 @@ def test_search_laws_empty():
 
 
 @responses_lib.activate
+def test_search_laws_raises_on_api_error_response():
+    xml = """<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <result>사용자 정보 검증에 실패하였습니다.</result>
+  <msg>등록된 서버에서 호출해 주세요.</msg>
+</Response>""".encode()
+    responses_lib.add(responses_lib.GET, f"{LAW_API_BASE}/lawSearch.do", body=xml, status=200)
+
+    with pytest.raises(RuntimeError, match="사용자 정보 검증"):
+        api_client.search_laws(query="민법")
+
+
+@responses_lib.activate
 def test_get_law_detail_from_api():
     xml = (FIXTURES_DIR / "detail_response.xml").read_bytes()
     responses_lib.add(responses_lib.GET, f"{LAW_API_BASE}/lawService.do", body=xml, status=200)
@@ -76,6 +90,20 @@ def test_get_law_detail_api_error():
     responses_lib.add(responses_lib.GET, f"{LAW_API_BASE}/lawService.do", body=xml, status=200)
     with pytest.raises(RuntimeError, match="실패"):
         api_client.get_law_detail("000000")
+
+
+@responses_lib.activate
+def test_get_law_detail_can_disable_http_retries():
+    responses_lib.add(
+        responses_lib.GET,
+        f"{LAW_API_BASE}/lawService.do",
+        status=500,
+    )
+
+    with pytest.raises(requests.HTTPError, match="500 Server Error"):
+        api_client.get_law_detail("37612", max_retries=0)
+
+    assert len(responses_lib.calls) == 1
 
 
 @responses_lib.activate
@@ -144,6 +172,29 @@ def test_parse_dot_date():
     assert api_client._parse_dot_date("") == ""
 
 
+def _history_row(
+    mst: str,
+    name: str,
+    *,
+    amendment: str = "제정",
+    law_type: str = "대통령령",
+    prom_date: str = "2004.7.24",
+) -> str:
+    return (
+        "<tr>"
+        "<td>1</td>"
+        f'<td><a href="/lsInfoP.do?MST={mst}">{name}</a></td>'
+        "<td>교육부</td>"
+        f"<td>{amendment}</td>"
+        f"<td>{law_type}</td>"
+        "<td>제 18455호</td>"
+        f"<td>{prom_date}</td>"
+        f"<td>{prom_date}</td>"
+        "<td></td>"
+        "</tr>"
+    )
+
+
 @responses_lib.activate
 def test_get_law_history_pagination():
     html = (FIXTURES_DIR / "history_response.html").read_bytes()
@@ -160,6 +211,123 @@ def test_get_law_history_pagination():
     # First entry is the 1958 제정
     assert history[0]["공포일자"] == "19580222"
     assert history[0]["법령일련번호"] == "100001"
+
+
+@responses_lib.activate
+def test_get_law_history_matches_full_name_ignoring_whitespace_only():
+    current_name = "국립사범대학 졸업자 중 교원미임용자 임용 등에 관한 특별법 시행령"
+    old_name = "국립사범대학졸업자중교원미임용자임용등에관한특별법시행령"
+    other_name = "국립사범대학졸업자중교원미임용자임용등에관한특별법시행규칙"
+    html = (
+        "<html><body><table>"
+        + _history_row("62094", old_name)
+        + _history_row("62095", other_name)
+        + "</table></body></html>"
+    )
+    responses_lib.add(
+        responses_lib.GET, f"{LAW_API_BASE}/lawSearch.do",
+        body=html, status=200,
+        content_type="text/html; charset=utf-8",
+    )
+
+    history = api_client.get_law_history(current_name)
+
+    assert [entry["법령일련번호"] for entry in history] == ["62094"]
+    assert history[0]["법령명한글"] == old_name
+
+
+@responses_lib.activate
+def test_get_law_history_matches_equivalent_middle_dots():
+    current_name = "수용ㆍ사용에 관한 법률"
+    old_name = "수용·사용에 관한 법률"
+    responses_lib.add(
+        responses_lib.GET,
+        f"{LAW_API_BASE}/lawSearch.do",
+        body="<html><body><table>" + _history_row("62096", old_name) + "</table></body></html>",
+        status=200,
+        content_type="text/html; charset=utf-8",
+    )
+
+    history = api_client.get_law_history(current_name, refresh=True)
+
+    assert [entry["법령일련번호"] for entry in history] == ["62096"]
+
+
+@responses_lib.activate
+def test_get_law_history_does_not_retry_name_mismatch(monkeypatch):
+    monkeypatch.setattr(api_client, "_EMPTY_HISTORY_RETRIES", 3)
+    responses_lib.add(
+        responses_lib.GET,
+        f"{LAW_API_BASE}/lawSearch.do",
+        body="<html><body><table>" + _history_row("62097", "다른 법령") + "</table></body></html>",
+        status=200,
+        content_type="text/html; charset=utf-8",
+    )
+
+    history = api_client.get_law_history("대상 법령", refresh=True)
+
+    assert history == []
+    assert len(responses_lib.calls) == 1
+
+
+@responses_lib.activate
+def test_get_law_history_raises_on_api_error_response():
+    xml = """<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <result>사용자 정보 검증에 실패하였습니다.</result>
+  <msg>등록된 서버에서 호출해 주세요.</msg>
+</Response>"""
+    responses_lib.add(
+        responses_lib.GET, f"{LAW_API_BASE}/lawSearch.do",
+        body=xml, status=200,
+        content_type="text/html; charset=utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="사용자 정보 검증"):
+        api_client.get_law_history("민법", refresh=True)
+
+
+@responses_lib.activate
+def test_get_law_history_retries_empty_history_response(monkeypatch):
+    monkeypatch.setattr(api_client, "_EMPTY_HISTORY_RETRIES", 2)
+    monkeypatch.setattr(api_client.time, "sleep", lambda _: None)
+    responses_lib.add(
+        responses_lib.GET, f"{LAW_API_BASE}/lawSearch.do",
+        body="<html><body></body></html>", status=200,
+        content_type="text/html; charset=utf-8",
+    )
+    responses_lib.add(
+        responses_lib.GET, f"{LAW_API_BASE}/lawSearch.do",
+        body="<html><body><table>" + _history_row("100001", "민법") + "</table></body></html>",
+        status=200,
+        content_type="text/html; charset=utf-8",
+    )
+
+    history = api_client.get_law_history("민법", refresh=True)
+
+    assert [entry["법령일련번호"] for entry in history] == ["100001"]
+    assert len(responses_lib.calls) == 2
+
+
+@responses_lib.activate
+def test_get_law_history_does_not_retry_active_known_empty(monkeypatch):
+    monkeypatch.setattr(
+        api_client,
+        "_active_known_empty_history",
+        lambda _name: {"reason": "upstream_empty", "expires_on": "2099-01-01"},
+    )
+    responses_lib.add(
+        responses_lib.GET,
+        f"{LAW_API_BASE}/lawSearch.do",
+        body="<html><body></body></html>",
+        status=200,
+        content_type="text/html; charset=utf-8",
+    )
+
+    history = api_client.get_law_history("알려진 빈 법령", refresh=True)
+
+    assert history == []
+    assert len(responses_lib.calls) == 1
 
 
 @responses_lib.activate

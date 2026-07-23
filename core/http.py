@@ -1,7 +1,9 @@
 """Shared HTTP request with throttle, retry, and exponential backoff."""
 
 import logging
+import random
 import time
+from collections.abc import Callable, Collection
 
 import requests
 
@@ -18,6 +20,9 @@ def make_request(
     api_key: str,
     max_retries: int = 3,
     backoff_base: float = 2.0,
+    non_retry_statuses: Collection[int] = (),
+    on_attempt: Callable[[], None] | None = None,
+    timeout: float = 30,
 ) -> requests.Response:
     """Make a throttled HTTP GET with retry and exponential backoff."""
     params["OC"] = api_key
@@ -25,9 +30,11 @@ def make_request(
     for attempt in range(max_retries + 1):
         throttle.wait()
         try:
-            resp = requests.get(url, params=params, timeout=30)
+            if on_attempt is not None:
+                on_attempt()
+            resp = requests.get(url, params=params, timeout=timeout)
             if resp.status_code == 429:
-                wait = backoff_base * (2 ** attempt)
+                wait = backoff_base * (2 ** attempt) + random.uniform(0, backoff_base)
                 logger.warning(f"Rate limited (429). Waiting {wait}s before retry.")
                 time.sleep(wait)
                 continue
@@ -42,9 +49,12 @@ def make_request(
             logger.warning(f"Request failed: {e}. Retry {attempt + 1}/{max_retries} in {wait}s")
             time.sleep(wait)
         except requests.RequestException as e:
+            status = e.response.status_code if e.response is not None else None
+            if status in non_retry_statuses:
+                raise
             if attempt == max_retries:
                 raise
-            wait = backoff_base * (2 ** attempt)
+            wait = backoff_base * (2 ** attempt) + random.uniform(0, backoff_base)
             logger.warning(f"Request failed: {e}. Retry {attempt + 1}/{max_retries} in {wait}s")
             time.sleep(wait)
 

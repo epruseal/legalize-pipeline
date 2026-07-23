@@ -17,6 +17,7 @@ from core.config import (  # noqa: F401
 ORDINANCE_REPO = ORDINANCE_KR_REPO
 ORDINANCE_CACHE_DIR = CACHE_ROOT / "ordinance"
 ORDINANCE_FAILURES_FILE = CACHE_ROOT / "ordinance_failures.jsonl"
+DETAIL_REQUEST_TIMEOUT_SECONDS = 120
 
 API_TYPES = ("조례", "규칙", "훈령", "예규", "고시", "의회규칙", "기타")
 STORAGE_TYPES = ("조례", "규칙", "훈령", "예규", "고시", "의회규칙")

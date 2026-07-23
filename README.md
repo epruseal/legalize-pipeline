@@ -56,11 +56,11 @@ python -m laws.import_laws --csv /path/to/법령검색목록.csv
 #### 캐시 수집 (병렬)
 
 ```bash
-# 모든 현행 법령 캐시
-python -m laws.fetch_cache
+# 모든 현행 법령 + 명시 seed 법령의 상세 XML/개정 이력 캐시
+python -m laws.fetch_cache --refresh-history --history-name-file laws/data/history_seed_names.txt
 
 # 워커 수 조절
-python -m laws.fetch_cache --workers 10
+python -m laws.fetch_cache --refresh-history --history-name-file laws/data/history_seed_names.txt --workers 10
 
 # 테스트 (10건)
 python -m laws.fetch_cache --limit 10
@@ -157,8 +157,11 @@ LEGALIZE-KR-WORKSPACE-ROOT/
     detail/{MST}.xml              # 법령 상세 API XML
     history/{법령명}.json         # 법령 개정 이력
     precedent/{판례일련번호}.xml  # 판례 상세 API XML
-    admrule/{행정규칙일련번호}.xml
-    ordinance/{자치법규일련번호}.xml  # 자치법규 상세 API XML (개정 버전별 1파일)
+    admrule/{행정규칙일련번호}.xml  # 행정규칙 연혁 상세 XML
+    ordinance/{자치법규ID}.xml          # 기존 현행 자치법규 상세 XML
+    ordinance/history/{자치법규일련번호}.xml  # 자치법규 연혁 상세 XML
+    ordinance/ordinance_history_entries.json  # nw=2 전체 연혁 목록
+    ordinance/_no_result_serials.txt    # 상세 API가 404를 반환한 연혁 일련번호
     images/                       # 이미지 캐시
     .checkpoint.json              # 법령 처리 상태
     .failed_msts.json             # 법령 실패 ledger
@@ -169,45 +172,15 @@ LEGALIZE-KR-WORKSPACE-ROOT/
 > 사용합니다. CI에서는 `LEGALIZE_CACHE_DIR` secret으로 주입된 영속 캐시 경로를
 > `WORKSPACE_ROOT/.cache`에 심볼릭 링크합니다.
 
-## 자치법규(ordinance) 연혁 수집
-
-법령(law)과 동일하게 자치법규도 **개정 연혁을 버전별로 수집**합니다. 컴파일러가
-이를 공포일자 타임스탬프를 가진 버전별 git commit으로 만듭니다.
-
-- **수집원**: `lawSearch.do?target=ordin&nw=2`(연혁) 검색은 같은 `자치법규ID`에 대해
-  개정 버전마다 별도의 `자치법규일련번호`(MST)와 `공포일자`를 반환합니다
-  (현행 `nw=1` 약 16만 건 대비 연혁 `nw=2` 약 86만 건). 각 MST의 본문은
-  `lawService.do?target=ordin&MST={mst}`로 받습니다.
-- **캐시 키**: 상세 XML은 `자치법규ID`가 아니라 **MST(`자치법규일련번호`)**로
-  키잉되어 `.cache/ordinance/{MST}.xml`에 저장됩니다. 한 자치법규의 모든 개정본이
-  공존하므로 컴파일러가 버전당 commit을 생성할 수 있습니다.
-- **수집 명령**:
-
-  ```bash
-  python -m ordinances.fetch_cache                 # 기본: nw=2 연혁 전체 + nw=1 현행 union
-  python -m ordinances.fetch_cache --skip-history  # 현행(nw=1)만 (기존 동작)
-  python -m ordinances.fetch_cache --no-union-current  # nw=2만, 현행 보강 생략
-  ```
-
-  전체 연혁 백필은 약 87만 detail 요청 규모입니다. 일일 쿼타(예: 300k) 내에서
-  반복 실행하면 `get_detail` 캐시 히트로 중단 지점부터 재개됩니다.
-- **증분 갱신**: `ordinances.update`는 최근 N일 현행(nw=1)을 받아 commit message의
-  `자치법규일련번호:` 라인을 기준으로 미커밋 MST만 새 개정 commit으로 이어붙입니다.
-- **재구축 주의**: 기존 캐시는 `자치법규ID` 키였습니다. 연혁 도입 후 MST 키로
-  바뀌므로 캐시를 재수집해야 하며, 자치법규-kr 저장소는 커밋 그래프가 바뀌어
-  force-push 재구축이 필요합니다.
-
 ## 캐시 다운로드
 
-사전 수집된 캐시 데이터는 [`legalize-kr/legalize-kr` 릴리즈 페이지](https://github.com/legalize-kr/legalize-kr/releases)에서 다운로드할 수 있습니다:
+사전 수집된 캐시 데이터는 [`legalize-kr/legalize-pipeline` 릴리즈 페이지](https://github.com/legalize-kr/legalize-pipeline/releases)에서
+`cache-YYYYMMDD.tar.zst.part*` 형태의 분할 압축 파일로 배포됩니다.
 
 ```bash
-# 메타 워크스페이스 루트에서
-git clone https://github.com/legalize-kr/legalize-kr.git legalize-kr
-
-# 캐시 압축 해제
-unzip legalize-kr-cache.zip
-# .cache/detail/*.xml, .cache/history/*.json이 생성됩니다
+# 메타 워크스페이스 루트에서 모든 part 파일을 받은 뒤
+cat cache-YYYYMMDD.tar.zst.part* | zstd -d --long=27 -T0 | tar -xf -
+# .cache/detail, .cache/history, .cache/precedent, .cache/admrule, .cache/ordinance, .cache/images가 생성됩니다
 ```
 
 그 후 이 저장소를 체크아웃:

@@ -6,17 +6,19 @@ pagination bug silently dropped), and verifies the end-to-end history-fetch
 stage rewrites the cache and passes the post-fetch invariant.
 """
 
+import sys
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 import pytest
 import responses as responses_lib
 
 import laws.api_client as api_client
 import laws.cache as law_cache
+import laws.detail_failure_allowlist as detail_failure_allowlist
 import laws.fetch_cache as fetch_cache
 
-LAW_API_BASE = "http://www.law.go.kr/DRF"
+LAW_API_BASE = "https://www.law.go.kr/DRF"
 
 
 @pytest.fixture(autouse=True)
@@ -29,6 +31,13 @@ def patch_api_key(monkeypatch):
     monkeypatch.setattr(api_client, "LAW_API_KEY", "testkey")
     from core.throttle import Throttle
     monkeypatch.setattr(api_client, "_throttle", Throttle(delay_seconds=0))
+
+
+@pytest.fixture(autouse=True)
+def clear_detail_failure_allowlist_cache():
+    detail_failure_allowlist.load_allowlist.cache_clear()
+    yield
+    detail_failure_allowlist.load_allowlist.cache_clear()
 
 
 def _row(mst: str, name: str) -> str:
@@ -49,6 +58,137 @@ def _row(mst: str, name: str) -> str:
 
 def _page(rows: list[str]) -> str:
     return "<html><body><table>" + "".join(rows) + "</table></body></html>"
+
+
+def test_history_name_file_adds_explicit_seed_after_limited_search(tmp_path: Path):
+    seed_file = tmp_path / "history_seed_names.txt"
+    seed_file.write_text(
+        "\n".join([
+            "# issue-specific backfill seeds",
+            "",
+            "폐지본법",
+            "현행법",
+        ]),
+        encoding="utf-8",
+    )
+    laws = [
+        {"법령명한글": "현행법"},
+        {"법령명한글": "다른현행법"},
+    ]
+
+    names = fetch_cache._history_names_from_laws(
+        laws,
+        history_name_files=[seed_file],
+        limit=1,
+    )
+
+    assert names == ["현행법", "폐지본법"]
+
+
+def test_history_names_deduplicate_equivalent_typography(tmp_path: Path):
+    seed_file = tmp_path / "history_seed_names.txt"
+    seed_file.write_text("공백 없는ㆍ법령\n", encoding="utf-8")
+    laws = [
+        {"법령명한글": "공백 없는ㆍ법령"},
+        {"법령명한글": "공백없는·법령"},
+    ]
+
+    names = fetch_cache._history_names_from_laws(
+        laws,
+        history_name_files=[seed_file],
+        limit=None,
+    )
+
+    assert names == ["공백 없는ㆍ법령"]
+
+
+def test_main_exits_when_skip_history_detail_fetch_has_errors(monkeypatch):
+    import laws.history_allowlist as history_allowlist
+
+    monkeypatch.setattr(sys, "argv", ["laws.fetch_cache", "--skip-history", "--workers", "1"])
+    monkeypatch.setattr(history_allowlist, "load_allowlist", lambda: {})
+    monkeypatch.setattr(
+        fetch_cache,
+        "fetch_all_msts",
+        lambda: [{"법령일련번호": "1", "법령명한글": "실패법"}],
+    )
+    monkeypatch.setattr(
+        fetch_cache,
+        "_fetch_detail_task",
+        lambda mst, name, counter: counter.inc("errors"),
+    )
+
+    with pytest.raises(SystemExit, match="law detail fetch failed: errors=1"):
+        fetch_cache.main()
+
+
+def test_fetch_detail_task_checks_active_allowlisted_failure_without_retries(
+    tmp_path: Path,
+    monkeypatch,
+):
+    allowlist_path = tmp_path / "known_detail_failures.yaml"
+    allowlist_path.write_text(
+        "\n".join([
+            "entries:",
+            '  - mst: "123"',
+            '    law_name: "깨진법"',
+            '    reason: "upstream_malformed_xml"',
+            '    expected_error: "mismatched tag"',
+            '    expires_on: "2099-01-01"',
+        ]),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(detail_failure_allowlist, "_DEFAULT_PATH", allowlist_path)
+    detail_failure_allowlist.load_allowlist.cache_clear()
+    from core.counter import Counter
+
+    counter = Counter()
+    with patch.object(
+        fetch_cache,
+        "get_law_detail",
+        side_effect=RuntimeError("mismatched tag: line 1"),
+    ) as mock_get_law_detail:
+        fetch_cache._fetch_detail_task("123", "", counter)
+
+    mock_get_law_detail.assert_called_once_with("123", max_retries=0)
+    assert counter.snapshot() == (0, 0, 0)
+    assert counter.snapshot_all()["known_failures"] == 1
+
+
+def test_fetch_detail_task_retries_normally_for_unexpected_allowlisted_error(
+    tmp_path: Path,
+    monkeypatch,
+):
+    allowlist_path = tmp_path / "known_detail_failures.yaml"
+    allowlist_path.write_text(
+        "\n".join([
+            "entries:",
+            '  - mst: "123"',
+            '    law_name: "깨진법"',
+            '    reason: "upstream_http_500"',
+            '    expected_error: "500 Server Error"',
+            '    expires_on: "2099-01-01"',
+        ]),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(detail_failure_allowlist, "_DEFAULT_PATH", allowlist_path)
+    detail_failure_allowlist.load_allowlist.cache_clear()
+
+    from core.counter import Counter
+
+    counter = Counter()
+    with patch.object(
+        fetch_cache,
+        "get_law_detail",
+        side_effect=[RuntimeError("connection reset"), None],
+    ) as mock_get_law_detail:
+        fetch_cache._fetch_detail_task("123", "", counter)
+
+    assert mock_get_law_detail.call_args_list == [
+        call("123", max_retries=0),
+        call("123"),
+    ]
+    assert counter.snapshot() == (0, 1, 0)
 
 
 @responses_lib.activate

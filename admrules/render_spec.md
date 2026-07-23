@@ -2,11 +2,20 @@
 
 Status: draft implementation seed.
 
-This file freezes the Python-side rendering rules used by `admrules.converter`
-before the Rust compiler parity gate exists.
+This file freezes the rendering rules shared by Python `admrules.converter`
+and the Rust `admrule-kr-compiler`.
 
 - Repository layout:
   `{기관경로...}/{행정규칙종류}/{행정규칙명}/본문.md`.
+- Source collection uses `target=admrul` with `history=True` / `nw=2`, so
+  `.cache/admrule/{행정규칙일련번호}.xml` contains history revisions, not only
+  the current list.
+- A rule's history identity is `행정규칙ID`. If that field is missing, fall
+  back to `행정규칙일련번호`.
+- The final `HEAD` represents the current administrative-rule snapshot. A
+  revision whose `제개정구분` contains `폐지` deletes the latest path for that
+  identity instead of writing a replacement Markdown file. The deleted content
+  remains in earlier Git commits.
 - `기관경로` is based on normalized `상위부처명`, `소관부처명`, and
   `담당부서기관명`, then corrected with legal parent relationships from
   `정부조직법` and agency-specific installation laws. If the resolved agency has
@@ -67,11 +76,28 @@ before the Rust compiler parity gate exists.
   bytes.
 - Collisions on identical `(기관경로, 행정규칙종류, 행정규칙명)` paths are
   resolved by suffixing the rule-name directory with `_{발령번호}`; if
-  `발령번호` is empty, use `행정규칙일련번호`.
+  `발령번호` is empty, use `행정규칙일련번호`. Path ownership across revisions
+  is tracked by the history identity above, so a name change for the same
+  `행정규칙ID` removes the previous path.
 - `발령일자` is the future Git author date source. Dates before 1970-01-01 are
   clamped to 1970-01-01 in frontmatter with `발령일자보정: true` and the raw
   API text preserved in `발령일자원문`.
 - `본문출처` is one of `api-text`, `parsed-from-hwp`, `parsing-failed`.
+- Markdown body rendering starts with `# {행정규칙명}` when a title is
+  available. The raw API text is then structured conservatively:
+  - `제N편`, `제N장`, `제N절`, and `제N관` lines become `#`, `##`, `###`,
+    and `####` headings respectively.
+  - Clear `제N조(제목)` and `제N조의M(제목)` lines become
+    `##### 제N조 (제목)` headings. Text after the title remains as the first
+    article body line.
+  - `제N조 삭제` and `제N조의M 삭제` become an article heading followed by
+    `삭제`.
+  - Lines beginning with circled paragraph numbers become `**①** ...`;
+    lines beginning with numeric subparagraph markers become
+    `  N\. ...`; lines beginning with Korean item markers become
+    `    가\. ...`.
+  - Lines that do not match these clear legal-text patterns are preserved
+    verbatim after Markdown-link escaping.
 - Binary attachments are never written to the Git tree. Attachment frontmatter
   is written under `첨부파일` as link metadata only, with `파일링크` and/or
   `PDF링크` when upstream provides 별표/서식 download links.

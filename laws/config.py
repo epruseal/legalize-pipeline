@@ -21,7 +21,9 @@ KR_DIR = LAW_REPO / "kr"
 # Suffixes that indicate a child law (order matters: longest first)
 CHILD_SUFFIXES = [
     (" 시행규칙", "시행규칙"),
+    ("시행규칙", "시행규칙"),
     (" 시행령", "시행령"),
+    ("시행령", "시행령"),
 ]
 
 # Fallback filename by 법령구분

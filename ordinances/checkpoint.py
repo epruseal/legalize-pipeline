@@ -60,38 +60,3 @@ def mark_detail_processed(mst: str) -> None:
 
 def get_processed_msts() -> set[str]:
     return set(load().get("processed_msts", []))
-
-
-INDEX_FILE = CACHE_ROOT / ".ordinance-index.jsonl"
-
-
-def save_crawl_index(entries: list[dict], *, nw: str, org: str = "", sborg: str = "") -> None:
-    """Persist crawl entries to disk so restarts skip re-crawling."""
-    INDEX_FILE.parent.mkdir(parents=True, exist_ok=True)
-    key = f"{nw}:{org or '*'}:{sborg or '*'}"
-    lines = []
-    if INDEX_FILE.exists():
-        for line in INDEX_FILE.read_text(encoding="utf-8").splitlines():
-            try:
-                rec = json.loads(line)
-                if rec.get("_crawl_key") != key:
-                    lines.append(line)
-            except (json.JSONDecodeError, ValueError):
-                pass
-    lines.append(json.dumps({"_crawl_key": key, "entries": entries}, ensure_ascii=False))
-    atomic_write_text(INDEX_FILE, "\n".join(lines) + "\n")
-
-
-def load_crawl_index(*, nw: str, org: str = "", sborg: str = "") -> list[dict] | None:
-    """Return previously saved crawl entries, or None if not cached."""
-    if not INDEX_FILE.exists():
-        return None
-    key = f"{nw}:{org or '*'}:{sborg or '*'}"
-    for line in INDEX_FILE.read_text(encoding="utf-8").splitlines():
-        try:
-            rec = json.loads(line)
-            if rec.get("_crawl_key") == key:
-                return rec["entries"]
-        except (json.JSONDecodeError, ValueError, KeyError):
-            pass
-    return None

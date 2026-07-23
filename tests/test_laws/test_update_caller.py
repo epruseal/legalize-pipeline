@@ -1,6 +1,7 @@
 """Tests for update.py caller site — empty-body quarantine via mark_failed_and_quarantine."""
 
 import json
+import subprocess
 
 import pytest
 
@@ -235,6 +236,7 @@ def test_empty_body_in_update_quarantines_existing_markdown(tmp_path, monkeypatc
     monkeypatch.setattr(update_mod, "get_processed_msts", lambda: set())
     monkeypatch.setattr(update_mod, "mark_processed", lambda mst: None)
     monkeypatch.setattr(update_mod, "set_last_update", lambda d: None)
+    monkeypatch.setattr(update_mod, "_commit_exists_for_mst", lambda mst: False)
 
     # Stub commit_law (no git)
     monkeypatch.setattr(update_mod, "commit_law", lambda *a, **kw: False)
@@ -259,7 +261,7 @@ def test_empty_body_in_update_quarantines_existing_markdown(tmp_path, monkeypatc
     assert failed_data["failed_msts"]["123"]["reason"] == "empty_body"
 
 
-def test_update_uses_git_dedup_instead_of_checkpoint_filter(tmp_path, monkeypatch):
+def test_update_skips_existing_git_commit_before_rewriting_file(tmp_path, monkeypatch):
     import laws.update as update_mod
     import laws.converter as conv
     import laws.cache as law_cache
@@ -276,16 +278,11 @@ def test_update_uses_git_dedup_instead_of_checkpoint_filter(tmp_path, monkeypatc
         "totalCnt": 1,
     })
     monkeypatch.setattr(update_mod, "get_law_history", lambda name, refresh=False: [])
-    monkeypatch.setattr(update_mod, "get_law_detail", lambda mst: {
-        "metadata": {
-            "법령명한글": "foo법",
-            "법령MST": "123",
-            "법령ID": "",
-            "법령구분": "법률",
-            "공포일자": "20240101",
-        },
-        "articles": [{"조문번호": "1"}],
-    })
+    monkeypatch.setattr(
+        update_mod,
+        "get_law_detail",
+        lambda mst: (_ for _ in ()).throw(AssertionError("detail must not be fetched")),
+    )
     monkeypatch.setattr(update_mod, "law_to_markdown", lambda detail: "# foo")
     monkeypatch.setattr(update_mod, "get_law_path", lambda name, law_type, law_id="": f"kr/{name}/법률.md")
     monkeypatch.setattr(update_mod, "reset_path_registry", lambda: None)
@@ -293,6 +290,7 @@ def test_update_uses_git_dedup_instead_of_checkpoint_filter(tmp_path, monkeypatc
     monkeypatch.setattr(update_mod, "get_processed_msts", lambda: {"123"})
     monkeypatch.setattr(update_mod, "mark_processed", lambda mst: None)
     monkeypatch.setattr(update_mod, "set_last_update", lambda d: None)
+    monkeypatch.setattr(update_mod, "_commit_exists_for_mst", lambda mst: mst == "123")
 
     calls = []
 
@@ -302,9 +300,9 @@ def test_update_uses_git_dedup_instead_of_checkpoint_filter(tmp_path, monkeypatc
 
     monkeypatch.setattr(update_mod, "commit_law", commit_stub)
 
-    assert update_mod.update(days=1, dry_run=False) == 1
-    assert calls
-    assert calls[0][1]["skip_dedup"] is False
+    assert update_mod.update(days=1, dry_run=False) == 0
+    assert calls == []
+    assert not (kr_dir / "foo법" / "법률.md").exists()
 
 
 def test_update_backfills_older_history_discovered_from_current_law(tmp_path, monkeypatch):
@@ -375,3 +373,220 @@ def test_update_backfills_older_history_discovered_from_current_law(tmp_path, mo
     update_mod.update(days=14, dry_run=True)
 
     assert detail_calls == ["244531", "286195"]
+
+
+def test_update_backfills_valid_cache_missing_msts_outside_search_window(
+    tmp_path,
+    monkeypatch,
+):
+    import laws.update as update_mod
+    import laws.converter as conv
+    import laws.cache as law_cache
+    from laws.audit_history_vs_git import MissingHistoryMst
+
+    kr_dir = tmp_path / "kr"
+    kr_dir.mkdir()
+    monkeypatch.setattr(update_mod, "KR_DIR", kr_dir)
+    monkeypatch.setattr(update_mod, "LAW_API_KEY", "test-key")
+    monkeypatch.setattr(conv, "KR_DIR", kr_dir, raising=False)
+    monkeypatch.setattr(law_cache, "CACHE_DIR", tmp_path / ".cache")
+
+    monkeypatch.setattr(update_mod, "search_laws", lambda **kw: {
+        "laws": [],
+        "totalCnt": 0,
+    })
+    monkeypatch.setattr(update_mod, "get_law_history", lambda name, refresh=False: [])
+
+    missing = [
+        MissingHistoryMst(
+            mst="259479",
+            law_name="인천광역시 제물포구ㆍ영종구 및 검단구 설치 등에 관한 법률",
+            amendment="제정",
+            law_type="법률",
+            promulgation_date="20240130",
+            promulgation_number="20161",
+            history_file="인천광역시 제물포구ㆍ영종구 및 검단구 설치 등에 관한 법률.json",
+            detail_status="valid_detail",
+        ),
+        MissingHistoryMst(
+            mst="281877",
+            law_name="인천광역시 제물포구ㆍ영종구 및 검단구 설치 등에 관한 법률",
+            amendment="일부개정",
+            law_type="법률",
+            promulgation_date="20251230",
+            promulgation_number="21247",
+            history_file="인천광역시 제물포구ㆍ영종구 및 검단구 설치 등에 관한 법률.json",
+            detail_status="valid_detail",
+        ),
+    ]
+
+    class AuditStub:
+        missing_in_git_with_valid_detail = missing
+
+    audit_calls = []
+
+    def audit_stub(**kwargs):
+        audit_calls.append(kwargs)
+        return AuditStub()
+
+    detail_calls = []
+
+    def detail_stub(mst):
+        detail_calls.append(mst)
+        return {
+            "metadata": {
+                "법령명한글": "인천광역시 제물포구ㆍ영종구 및 검단구 설치 등에 관한 법률",
+                "법령MST": mst,
+                "법령ID": "014604",
+                "법령구분": "법률",
+                "공포일자": "20240130" if mst == "259479" else "20251230",
+                "공포번호": "20161" if mst == "259479" else "21247",
+            },
+            "articles": [{"조문번호": "1"}],
+        }
+
+    monkeypatch.setattr(update_mod, "audit_history_vs_git", audit_stub)
+    monkeypatch.setattr(update_mod, "get_law_detail", detail_stub)
+    monkeypatch.setattr(update_mod, "law_to_markdown", lambda detail: "# 법\n\n본문")
+    monkeypatch.setattr(update_mod, "reset_path_registry", lambda: None)
+    monkeypatch.setattr(update_mod, "get_last_update", lambda: "2026-06-01")
+    monkeypatch.setattr(update_mod, "get_processed_msts", lambda: set())
+    monkeypatch.setattr(update_mod, "mark_processed", lambda mst: None)
+    monkeypatch.setattr(update_mod, "set_last_update", lambda d: None)
+    monkeypatch.setattr(update_mod, "commit_law", lambda *args, **kwargs: False)
+
+    update_mod.update(
+        days=14,
+        dry_run=True,
+        backfill_missing_from_cache=True,
+        cache_backfill_recent_days=730,
+    )
+
+    assert audit_calls == [{"recent_days": 730}]
+    assert detail_calls == ["259479", "281877"]
+
+
+def test_update_restores_newer_current_state_after_historical_backfill(
+    tmp_path,
+    monkeypatch,
+):
+    import laws.cache as law_cache
+    import laws.converter as conv
+    import laws.git_engine as law_git_engine
+    import laws.update as update_mod
+    from laws.audit_history_vs_git import MissingHistoryMst
+
+    repo = tmp_path / "legalize-kr"
+    kr_dir = repo / "kr"
+    current_path = kr_dir / "테스트규칙" / "교육부령.md"
+    current_path.parent.mkdir(parents=True)
+    current_content = "\n".join([
+        "---",
+        "제목: 테스트 규칙",
+        "법령MST: 300",
+        "법령ID: '000300'",
+        "법령구분: 교육부령",
+        "공포일자: 2025-01-01",
+        "공포번호: 300",
+        "---",
+        "",
+        "##### 제1조 (최신)",
+        "",
+        "최신 본문이다.",
+    ])
+    current_path.write_text(current_content, encoding="utf-8")
+
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "kr"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "교육부령: 테스트 규칙\n\n법령MST: 300"],
+        cwd=repo,
+        check=True,
+    )
+
+    monkeypatch.setattr(update_mod, "KR_DIR", kr_dir)
+    monkeypatch.setattr(update_mod, "LAW_API_KEY", "test-key")
+    monkeypatch.setattr(conv, "KR_DIR", kr_dir, raising=False)
+    monkeypatch.setattr(law_git_engine, "LAW_REPO", repo)
+    monkeypatch.setattr(law_cache, "CACHE_DIR", tmp_path / ".cache")
+    monkeypatch.setattr(update_mod, "search_laws", lambda **kwargs: {"laws": [], "totalCnt": 0})
+    monkeypatch.setattr(update_mod, "get_last_update", lambda: "2026-07-01")
+    monkeypatch.setattr(update_mod, "mark_processed", lambda mst: None)
+    monkeypatch.setattr(update_mod, "set_last_update", lambda date: None)
+    monkeypatch.setattr(update_mod, "reset_path_registry", lambda: None)
+
+    missing = MissingHistoryMst(
+        mst="100",
+        law_name="테스트 규칙",
+        amendment="제정",
+        law_type="교육과학기술부령",
+        promulgation_date="20100101",
+        promulgation_number="100",
+        history_file="테스트 규칙.json",
+        detail_status="valid_detail",
+    )
+
+    class AuditStub:
+        missing_in_git_with_valid_detail = [missing]
+
+    monkeypatch.setattr(update_mod, "audit_history_vs_git", lambda **kwargs: AuditStub())
+    monkeypatch.setattr(update_mod, "get_law_detail", lambda mst: {
+        "metadata": {
+            "법령명한글": "테스트 규칙",
+            "법령MST": mst,
+            "법령ID": "000300",
+            "법령구분": "교육과학기술부령",
+            "공포일자": "20100101",
+            "공포번호": "100",
+            "제개정구분": "제정",
+        },
+        "articles": [{"조문번호": "1"}],
+    })
+    monkeypatch.setattr(update_mod, "law_to_markdown", lambda detail: "\n".join([
+        "---",
+        "제목: 테스트 규칙",
+        "법령MST: 100",
+        "법령ID: '000300'",
+        "법령구분: 교육과학기술부령",
+        "공포일자: 2010-01-01",
+        "공포번호: 100",
+        "---",
+        "",
+        "##### 제1조 (과거)",
+        "",
+        "과거 본문이다.",
+    ]))
+
+    committed = update_mod.update(
+        days=14,
+        augment_history=False,
+        backfill_missing_from_cache=True,
+    )
+
+    old_path = kr_dir / "테스트규칙" / "교육과학기술부령.md"
+    assert committed == 1
+    assert current_path.read_text(encoding="utf-8") == current_content
+    assert not old_path.exists()
+    assert subprocess.run(
+        ["git", "log", "--format=%B", "--grep=법령MST: 100"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    assert subprocess.run(
+        ["git", "log", "-1", "--format=%s"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip() == "chore(laws): 과거 이력 백필 후 최신 상태 복원"
+    assert subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout == ""

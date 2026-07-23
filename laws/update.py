@@ -13,11 +13,13 @@ Usage (from legalize-pipeline root):
 import argparse
 import logging
 import subprocess
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 import yaml
 
 from .api_client import get_law_detail, get_law_history, search_laws
+from .audit_history_vs_git import DEFAULT_RECENT_DAYS, audit as audit_history_vs_git
 from .checkpoint import get_last_update, get_processed_msts, mark_processed, set_last_update
 from .config import KR_DIR, LAW_API_KEY
 from .converter import (
@@ -28,14 +30,25 @@ from .converter import (
     law_to_markdown,
     reset_path_registry,
 )
-from .git_engine import commit_law
+from .git_engine import commit_law, commit_law_changes
 from core.git_engine import commit_exists
-from .import_laws import VersionTracker, build_commit_msg
+from .import_laws import build_commit_msg
 
 logger = logging.getLogger(__name__)
 
 
-def _markdown_law_id(md_file) -> str | None:
+@dataclass(frozen=True)
+class _CurrentLawSnapshot:
+    """Current result-tree state preserved while older MSTs are backfilled."""
+
+    law_name: str
+    law_type: str
+    path: str
+    content: str
+    sort_key: tuple[str, str, int, int]
+
+
+def _markdown_frontmatter(md_file) -> dict | None:
     try:
         text = md_file.read_text(encoding="utf-8")
     except OSError:
@@ -50,9 +63,109 @@ def _markdown_law_id(md_file) -> str | None:
         fm = yaml.safe_load(yaml_str)
     except yaml.YAMLError:
         return None
-    if isinstance(fm, dict):
-        return str(fm.get("법령ID", ""))
-    return None
+    return fm if isinstance(fm, dict) else None
+
+
+def _markdown_law_id(md_file) -> str | None:
+    fm = _markdown_frontmatter(md_file)
+    return str(fm.get("법령ID", "")) if fm is not None else None
+
+
+def _metadata_sort_key(meta: dict) -> tuple[str, str, int, int]:
+    prom_date = str(meta.get("공포일자", "")).replace("-", "")
+    law_name = str(meta.get("법령명한글", meta.get("제목", "")))
+    return entry_sort_key(
+        prom_date,
+        law_name,
+        str(meta.get("공포번호", "")),
+        str(meta.get("법령MST", "")),
+    )
+
+
+def _remember_newer_current_law(
+    meta: dict,
+    snapshots: dict[str, _CurrentLawSnapshot],
+) -> tuple[str, str, int, int]:
+    """Preserve a newer current file before an older history MST overwrites it."""
+
+    candidate_key = _metadata_sort_key(meta)
+    law_id = str(meta.get("법령ID", ""))
+    if not law_id or law_id in snapshots:
+        return candidate_key
+
+    law_name = str(meta.get("법령명한글", ""))
+    law_type = str(meta.get("법령구분", ""))
+    existing_path = _find_existing_path_for_law_id(law_name, law_type, law_id)
+    if not existing_path:
+        return candidate_key
+
+    existing_file = KR_DIR.parent / existing_path
+    existing_meta = _markdown_frontmatter(existing_file)
+    if existing_meta is None or _metadata_sort_key(existing_meta) <= candidate_key:
+        return candidate_key
+
+    snapshots[law_id] = _CurrentLawSnapshot(
+        law_name=str(existing_meta.get("제목", law_name)),
+        law_type=str(existing_meta.get("법령구분", law_type)),
+        path=existing_path,
+        content=existing_file.read_text(encoding="utf-8"),
+        sort_key=_metadata_sort_key(existing_meta),
+    )
+    logger.info(
+        "Preserving newer current state for law_id=%s while backfilling MST=%s",
+        law_id,
+        meta.get("법령MST", ""),
+    )
+    return candidate_key
+
+
+def _restore_newer_current_laws(
+    snapshots: dict[str, _CurrentLawSnapshot],
+    date: str,
+) -> bool:
+    """Restore current law files after older history commits have been appended."""
+
+    changed_paths: list[str] = []
+    for law_id, snapshot in sorted(snapshots.items()):
+        current_path = _find_existing_path_for_law_id(
+            snapshot.law_name,
+            snapshot.law_type,
+            law_id,
+        )
+        original_abs = KR_DIR.parent / snapshot.path
+        if current_path and current_path != snapshot.path:
+            original_abs.parent.mkdir(parents=True, exist_ok=True)
+            if original_abs.exists():
+                subprocess.run(
+                    ["git", "rm", "--force", current_path],
+                    cwd=KR_DIR.parent,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+            else:
+                subprocess.run(
+                    ["git", "mv", "-f", current_path, snapshot.path],
+                    cwd=KR_DIR.parent,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+
+        original_abs.parent.mkdir(parents=True, exist_ok=True)
+        original_abs.write_text(snapshot.content, encoding="utf-8")
+        changed_paths.append(snapshot.path)
+        if current_path:
+            changed_paths.append(current_path)
+
+    unique_paths = list(dict.fromkeys(changed_paths))
+    if not unique_paths:
+        return False
+    return commit_law_changes(
+        unique_paths,
+        "chore(laws): 과거 이력 백필 후 최신 상태 복원",
+        date,
+    )
 
 
 def _find_existing_path_for_law_id(law_name: str, law_type: str, law_id: str) -> str | None:
@@ -162,6 +275,31 @@ def _commit_exists_for_mst(mst: str) -> bool:
     return commit_exists(KR_DIR.parent, f"법령MST: {mst}")
 
 
+def _append_missing_cache_history_msts(
+    all_laws: list[dict],
+    seen_msts: set[str],
+    *,
+    recent_days: int = DEFAULT_RECENT_DAYS,
+) -> int:
+    """Append valid-detail history MSTs that are cached but absent from Git."""
+
+    report = audit_history_vs_git(recent_days=recent_days)
+    added = 0
+    for record in report.missing_in_git_with_valid_detail:
+        if not record.mst or record.mst in seen_msts:
+            continue
+        all_laws.append({
+            "법령일련번호": record.mst,
+            "법령명한글": record.law_name,
+            "제개정구분명": record.amendment,
+            "법령구분": record.law_type,
+            "공포일자": record.promulgation_date,
+            "공포번호": record.promulgation_number,
+            "시행일자": "",
+        })
+        seen_msts.add(record.mst)
+        added += 1
+    return added
 
 
 def update(
@@ -171,6 +309,8 @@ def update(
     max_pages: int = 50,
     augment_history: bool = True,
     backfill_discovered_history: bool = True,
+    backfill_missing_from_cache: bool = False,
+    cache_backfill_recent_days: int = DEFAULT_RECENT_DAYS,
 ) -> int:
     """Query API for recently amended laws and import their latest versions."""
     if not LAW_API_KEY:
@@ -256,6 +396,17 @@ def update(
             f"(errors={history_errors})"
         )
 
+    if backfill_missing_from_cache:
+        seen_msts = {law.get("법령일련번호", "") for law in all_laws}
+        backfilled = _append_missing_cache_history_msts(
+            all_laws,
+            seen_msts,
+            recent_days=cache_backfill_recent_days,
+        )
+        logger.info(
+            f"cache history backfill: +{backfilled} valid-detail MSTs absent from Git"
+        )
+
     # Checkpoints are only a cursor for the search window. Commit existence
     # must come from Git so a freshly cloned/generated result repo converges
     # even if the local checkpoint is stale or ahead.
@@ -271,15 +422,30 @@ def update(
 
     committed = 0
     errors = 0
-
-    tracker = VersionTracker()
+    # Missing historical commits are appended to the current branch rather
+    # than inserted chronologically. Preserve a newer HEAD state so an older
+    # backfill cannot become the published law body after the loop finishes.
+    current_snapshots: dict[str, _CurrentLawSnapshot] = {}
 
     for i, law in enumerate(new_laws, 1):
         mst = law["법령일련번호"]
         name = law.get("법령명한글", "")
 
         file_path = None
+        candidate_key = None
         try:
+            # A matching MST commit is immutable. Check before resolving paths or
+            # rewriting Markdown so duplicate search results cannot leave dirty,
+            # uncommitted files behind when commit_law's defensive dedup skips.
+            if not dry_run and _commit_exists_for_mst(mst):
+                logger.info(
+                    "  [%s/%s] Commit already exists for MST=%s, skipping",
+                    i,
+                    len(new_laws),
+                    mst,
+                )
+                continue
+
             detail = get_law_detail(mst)
             meta = detail["metadata"]
             law_type = meta.get("법령구분", "")
@@ -289,6 +455,8 @@ def update(
 
             fetched_name = meta.get("법령명한글", name)
             law_id = meta.get("법령ID", "")
+            if not dry_run:
+                candidate_key = _remember_newer_current_law(meta, current_snapshots)
             file_path, extra_commit_paths = _resolve_write_path_for_law(
                 fetched_name,
                 law_type,
@@ -296,9 +464,6 @@ def update(
                 dry_run=dry_run,
             )
             abs_path = KR_DIR.parent / file_path
-
-            if not dry_run:
-                tracker.seen(file_path)
 
             meta["제개정구분"] = law.get("제개정구분명", meta.get("제개정구분", ""))
             if not meta.get("공포번호"):
@@ -327,12 +492,16 @@ def update(
                 extra_paths=extra_commit_paths,
             )
             if result:
-                from .failures import clear_failed
                 mark_processed(mst)
-                clear_failed(mst)
                 committed += 1
+                snapshot = current_snapshots.get(str(law_id))
+                if (
+                    snapshot is not None
+                    and candidate_key is not None
+                    and candidate_key >= snapshot.sort_key
+                ):
+                    current_snapshots.pop(str(law_id), None)
                 logger.info(f"  [{i}/{len(new_laws)}] Committed MST={mst} {prom_date} {fetched_name}")
-                tracker.committed(file_path, meta, mst)
 
         except ValueError as e:  # empty body (P1)
             from .failures import log_failure, mark_failed, mark_failed_and_quarantine
@@ -357,12 +526,18 @@ def update(
         if i % 50 == 0:
             logger.info(f"Progress: {i}/{len(new_laws)} (committed={committed}, errors={errors})")
 
-    restored = 0
+    if not dry_run and current_snapshots:
+        restored = _restore_newer_current_laws(current_snapshots, format_date(today))
+        logger.info(
+            "Restored %s newer current law states after historical backfill (committed=%s)",
+            len(current_snapshots),
+            restored,
+        )
+
     if not dry_run:
-        restored = tracker.restore()
         set_last_update(format_date(today))
 
-    logger.info(f"Update done: committed={committed}, restored={restored}, errors={errors}")
+    logger.info(f"Update done: committed={committed}, errors={errors}")
     return committed
 
 
@@ -397,6 +572,23 @@ def main():
             "for laws in the update window. Default on to prevent historical gaps."
         ),
     )
+    parser.add_argument(
+        "--backfill-missing-from-cache",
+        action="store_true",
+        help=(
+            "Audit cached history against Git and import every missing MST that "
+            "already has valid detail XML, even if lawSearch does not surface it."
+        ),
+    )
+    parser.add_argument(
+        "--cache-backfill-recent-days",
+        type=int,
+        default=DEFAULT_RECENT_DAYS,
+        help=(
+            "Recent-days window used only for cache-backfill audit reporting "
+            f"(default: {DEFAULT_RECENT_DAYS})."
+        ),
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -408,6 +600,8 @@ def main():
         max_pages=args.max_pages,
         augment_history=not args.no_augment_history,
         backfill_discovered_history=not args.no_backfill_discovered_history,
+        backfill_missing_from_cache=args.backfill_missing_from_cache,
+        cache_backfill_recent_days=args.cache_backfill_recent_days,
     )
 
     if not args.dry_run:

@@ -18,14 +18,25 @@ import json
 import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 
-from . import cache
-from .api_client import get_law_detail, get_law_history, search_laws
+from . import cache, detail_failure_allowlist
+from .api_client import (
+    get_law_detail,
+    get_law_history,
+    normalize_history_law_name,
+    search_laws,
+)
 from .config import CONCURRENT_WORKERS
 from .history_allowlist import filter_and_check
 from core.counter import Counter
 
 logger = logging.getLogger(__name__)
+
+
+def _exit_if_errors(phase: str, errors: int) -> None:
+    if errors:
+        raise SystemExit(f"{phase} failed: errors={errors}")
 
 
 def fetch_all_msts() -> list[dict]:
@@ -51,10 +62,31 @@ def _fetch_detail_task(mst: str, name: str, counter: Counter) -> None:
     if cache.get_detail(mst) is not None:
         counter.inc("cached")
         return
+
     try:
-        get_law_detail(mst)
+        active_entry = detail_failure_allowlist.active_entry(mst)
+        if active_entry is None:
+            get_law_detail(mst)
+        else:
+            # Probe once for upstream recovery, but avoid exponential backoff
+            # when the response still matches the active allowlist entry.
+            try:
+                get_law_detail(mst, max_retries=0)
+            except Exception as e:
+                if detail_failure_allowlist.accepted_entry(mst, e) is not None:
+                    raise
+                get_law_detail(mst)
         counter.inc("fetched")
     except Exception as e:
+        entry = detail_failure_allowlist.accepted_entry(mst, e)
+        if entry is not None:
+            law_name = name or entry["law_name"]
+            logger.warning(
+                f"Known upstream detail failure MST {mst} ({law_name}): {e} "
+                f"[{entry['reason']}]"
+            )
+            counter.inc("known_failures")
+            return
         logger.error(f"Failed MST {mst} ({name}): {e}")
         counter.inc("errors")
 
@@ -131,6 +163,49 @@ def _assert_no_empty_history_cache() -> None:
         raise RuntimeError("History cache invariant violated: " + "; ".join(problems))
 
 
+def _load_history_name_file(path: Path) -> list[str]:
+    """Load explicit law-name seeds from a newline-delimited text file."""
+
+    names: list[str] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        name = line.strip()
+        if not name or name.startswith("#"):
+            continue
+        names.append(name)
+    return names
+
+
+def _history_names_from_laws(
+    laws: list[dict],
+    *,
+    history_name_files: list[Path],
+    limit: int | None,
+) -> list[str]:
+    """Return deduplicated history seed names from current laws plus explicit files."""
+
+    seen_names: set[str] = set()
+    unique_names: list[str] = []
+    for law in laws:
+        name = law.get("법령명한글", "")
+        key = normalize_history_law_name(name)
+        if key and key not in seen_names:
+            seen_names.add(key)
+            unique_names.append(name)
+
+    if limit:
+        unique_names = unique_names[:limit]
+        seen_names = {normalize_history_law_name(name) for name in unique_names}
+
+    for path in history_name_files:
+        for name in _load_history_name_file(path):
+            key = normalize_history_law_name(name)
+            if key not in seen_names:
+                seen_names.add(key)
+                unique_names.append(name)
+
+    return unique_names
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Fetch and cache law detail responses and amendment histories"
@@ -151,6 +226,17 @@ def main():
         ),
     )
     parser.add_argument(
+        "--history-name-file",
+        type=Path,
+        action="append",
+        default=[],
+        help=(
+            "Read additional law names from a newline-delimited file and use "
+            "them as explicit lsHistory seeds. Blank lines and lines starting "
+            "with '#' are ignored."
+        ),
+    )
+    parser.add_argument(
         "--workers",
         type=int,
         default=CONCURRENT_WORKERS,
@@ -164,6 +250,7 @@ def main():
     from .history_allowlist import load_allowlist
     try:
         load_allowlist()
+        detail_failure_allowlist.load_allowlist()
     except Exception as e:
         logger.error(f"Allowlist pre-flight failed: {e}")
         raise
@@ -207,19 +294,17 @@ def main():
 
         c, f, e = counter.snapshot()
         logger.info(f"Detail fetch done: cached={c}, fetched={f}, errors={e}")
+        known = counter.snapshot_all().get("known_failures", 0)
+        if known:
+            logger.warning(f"Known detail failures skipped: known_failures={known}")
+        _exit_if_errors("law detail fetch", e)
         return
 
-    # Deduplicate by 법령명한글
-    seen_names: set[str] = set()
-    unique_names: list[str] = []
-    for law in all_laws:
-        name = law.get("법령명한글", "")
-        if name and name not in seen_names:
-            seen_names.add(name)
-            unique_names.append(name)
-
-    if args.limit:
-        unique_names = unique_names[:args.limit]
+    unique_names = _history_names_from_laws(
+        all_laws,
+        history_name_files=args.history_name_file,
+        limit=args.limit,
+    )
 
     # Step 1: Fetch history concurrently
     logger.info(f"Fetching history for {len(unique_names)} unique law names (workers={workers})...")
@@ -251,6 +336,7 @@ def main():
 
     c, f, e = history_counter.snapshot()
     logger.info(f"History fetch done: cached={c}, fetched={f}, errors={e}, total_msts={len(all_msts)}")
+    _exit_if_errors("law history fetch", e)
 
     _assert_no_empty_history_cache()
 
@@ -276,6 +362,10 @@ def main():
 
     c, f, e = detail_counter.snapshot()
     logger.info(f"Detail fetch done: cached={c}, fetched={f}, errors={e}")
+    known = detail_counter.snapshot_all().get("known_failures", 0)
+    if known:
+        logger.warning(f"Known detail failures skipped: known_failures={known}")
+    _exit_if_errors("law detail fetch", e)
 
 
 if __name__ == "__main__":

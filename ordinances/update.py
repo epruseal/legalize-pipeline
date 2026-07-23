@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from .config import CONCURRENT_WORKERS, ORDINANCE_REPO
-from .fetch_cache import fetch_all_current, fetch_details
+from .fetch_cache import fetch_all_current, fetch_details, fetch_history_for_entries
 from .import_ordinances import import_from_cache
 
 logger = logging.getLogger(__name__)
@@ -19,20 +19,20 @@ def _date_range(days: int) -> str:
     return f"{since:%Y%m%d}~{today:%Y%m%d}"
 
 
-def _current_msts(entries: list[dict], limit: int | None = None) -> list[str]:
-    msts = []
+def _current_serials(entries: list[dict], limit: int | None = None) -> list[str]:
+    serials = []
     seen = set()
     for entry in entries:
-        mst = str(entry.get("자치법규일련번호", ""))
-        if mst and mst not in seen:
-            seen.add(mst)
-            msts.append(mst)
-    return msts[:limit] if limit is not None else msts
+        serial = str(entry.get("자치법규일련번호", "")) or str(entry.get("자치법규ID", ""))
+        if serial and serial not in seen:
+            seen.add(serial)
+            serials.append(serial)
+    return serials[:limit] if limit is not None else serials
 
 
-def _committed_msts(repo: Path) -> set[str]:
+def _committed_metadata(repo: Path) -> tuple[set[str], set[str]]:
     if not (repo / ".git").exists():
-        return set()
+        return set(), set()
     result = subprocess.run(
         ["git", "log", "--all", "--format=%B"],
         cwd=repo,
@@ -40,13 +40,47 @@ def _committed_msts(repo: Path) -> set[str]:
         text=True,
     )
     if result.returncode != 0:
-        return set()
-    prefix = "자치법규일련번호: "
-    return {
-        line[len(prefix):].strip()
-        for line in result.stdout.splitlines()
-        if line.startswith(prefix) and line[len(prefix):].strip()
-    }
+        return set(), set()
+    serial_prefix = "자치법규일련번호: "
+    identity_prefix = "자치법규ID: "
+    serials = set()
+    identities = set()
+    for line in result.stdout.splitlines():
+        if line.startswith(serial_prefix) and line[len(serial_prefix):].strip():
+            serials.add(line[len(serial_prefix):].strip())
+        elif line.startswith(identity_prefix) and line[len(identity_prefix):].strip():
+            identities.add(line[len(identity_prefix):].strip())
+    return serials, identities
+
+
+def _compact_date(value: str) -> str:
+    return "".join(ch for ch in str(value) if ch.isdigit())
+
+
+def _within_date_range(entry: dict, date_range: str) -> bool:
+    try:
+        start, end = date_range.split("~", 1)
+    except ValueError:
+        return True
+    value = _compact_date(entry.get("공포일자", ""))
+    return bool(value) and start <= value <= end
+
+
+def _import_serials(entries: list[dict], repo: Path, date_range: str, *, commit: bool) -> list[str]:
+    current_serials = _current_serials(entries)
+    if not commit:
+        return current_serials
+
+    committed_serials, committed_identities = _committed_metadata(repo)
+    serials = []
+    for entry in entries:
+        serial = str(entry.get("자치법규일련번호", "")) or str(entry.get("자치법규ID", ""))
+        identity = str(entry.get("자치법규ID", ""))
+        if not serial or serial in committed_serials or serial in serials:
+            continue
+        if identity not in committed_identities or _within_date_range(entry, date_range):
+            serials.append(serial)
+    return serials
 
 
 def run(
@@ -62,18 +96,25 @@ def run(
 ) -> dict[str, int]:
     date_range = _date_range(days)
     logger.info("searching ordinances in date range %s", date_range)
-    entries = fetch_all_current(types, org=org, sborg=sborg, max_entries=limit, date_range=date_range)
-    current_msts = _current_msts(entries, limit)
-    committed_msts = _committed_msts(repo) if commit else set()
-    import_msts = [mst for mst in current_msts if mst not in committed_msts] if commit else current_msts
-    fetch_counter = fetch_details(entries, workers=workers, limit=limit)
+    current_entries = fetch_all_current(types, org=org, sborg=sborg, max_entries=limit, date_range=date_range)
+    entries = fetch_history_for_entries(current_entries, types) if current_entries else []
+    if not entries:
+        entries = current_entries
+    import_serials = _import_serials(entries, repo, date_range, commit=commit)
+    import_serial_set = set(import_serials)
+    fetch_entries = [
+        entry
+        for entry in entries
+        if (str(entry.get("자치법규일련번호", "")) or str(entry.get("자치법규ID", ""))) in import_serial_set
+    ]
+    fetch_counter = fetch_details(fetch_entries, workers=workers)
     cached, fetched, fetch_errors = fetch_counter.snapshot()
     import_stats = import_from_cache(
         repo,
         limit=None,
         commit=commit,
-        msts=import_msts,
-        skip_dedup=commit,
+        serials=import_serials,
+        skip_dedup=False,
     )
     stats = {
         "cached": cached,

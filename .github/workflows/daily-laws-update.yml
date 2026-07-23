@@ -11,6 +11,7 @@ permissions:
 concurrency:
   group: workspace-cache
   cancel-in-progress: false
+  queue: max
 
 env:
   WORKSPACE_ROOT: ${{ github.workspace }}/LEGALIZE-KR-WORKSPACE-ROOT
@@ -21,7 +22,7 @@ env:
 jobs:
   update:
     runs-on: self-hosted
-    timeout-minutes: 60
+    timeout-minutes: 360
 
     steps:
       - name: Checkout law repo
@@ -66,7 +67,7 @@ jobs:
           LAW_OC: ${{ secrets.LAW_OC }}
         run: |
           . "$WORKSPACE_ROOT/.venv/bin/activate"
-          python -m laws.update --days 14
+          python -m laws.update --days 14 --backfill-missing-from-cache
 
       - name: Validate
         working-directory: ${{ env.PIPELINE_REPO }}
@@ -79,6 +80,12 @@ jobs:
         run: |
           . "$WORKSPACE_ROOT/.venv/bin/activate"
           python -m laws.audit_cache_vs_repo --fail-on-missing-content --fail-on-new-path-drift
+
+      - name: Audit history MSTs against git
+        working-directory: ${{ env.PIPELINE_REPO }}
+        run: |
+          . "$WORKSPACE_ROOT/.venv/bin/activate"
+          python -m laws.audit_history_vs_git --fail-on-any-valid-missing --recent-days 365
 
       - name: Report import failures
         working-directory: ${{ env.PIPELINE_REPO }}

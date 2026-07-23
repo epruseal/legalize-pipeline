@@ -13,7 +13,7 @@ import responses as responses_lib
 import laws.api_client as api_client
 import laws.cache as law_cache
 
-LAW_API_BASE = "http://www.law.go.kr/DRF"
+LAW_API_BASE = "https://www.law.go.kr/DRF"
 
 
 @pytest.fixture(autouse=True)

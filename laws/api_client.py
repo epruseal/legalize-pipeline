@@ -1,6 +1,10 @@
 """Thin wrapper around law.go.kr OpenAPI."""
 
 import logging
+import re
+import time
+from datetime import date
+from html import unescape
 from xml.etree import ElementTree
 
 import requests
@@ -13,12 +17,35 @@ from .config import (
     MAX_RETRIES,
     REQUEST_DELAY_SECONDS,
 )
+from .history_allowlist import load_allowlist as load_empty_history_allowlist
 from core.http import make_request
 from core.throttle import Throttle
 
 logger = logging.getLogger(__name__)
 
 _throttle = Throttle(REQUEST_DELAY_SECONDS)
+_EMPTY_HISTORY_RETRIES = min(MAX_RETRIES, 3)
+
+
+def _raise_if_api_error(root: ElementTree.Element, context: str) -> None:
+    result = root.findtext("result", "")
+    if result and "실패" in result:
+        message = root.findtext("msg", "")
+        raise RuntimeError(f"API error for {context}: {result} - {message}")
+
+
+def _raise_if_html_api_error(text: str, context: str) -> None:
+    result_match = re.search(r"<result>\s*(.*?)\s*</result>", text, re.DOTALL)
+    if not result_match:
+        return
+    result = unescape(re.sub(r"<[^>]+>", "", result_match.group(1)).strip())
+    if "실패" not in result:
+        return
+    message_match = re.search(r"<msg>\s*(.*?)\s*</msg>", text, re.DOTALL)
+    message = ""
+    if message_match:
+        message = unescape(re.sub(r"<[^>]+>", "", message_match.group(1)).strip())
+    raise RuntimeError(f"API error for {context}: {result} - {message}")
 
 # law.go.kr intermittently emits <조문참고자료> without its closing tag, which
 # makes the whole document unparseable ("mismatched tag"). The element only ever
@@ -103,13 +130,18 @@ def _attachments_from_xml(root: ElementTree.Element) -> list[dict]:
     return attachments
 
 
-def _request(url: str, params: dict) -> requests.Response:
+def _request(
+    url: str,
+    params: dict,
+    *,
+    max_retries: int = MAX_RETRIES,
+) -> requests.Response:
     """Make a throttled request with retry and exponential backoff."""
     return make_request(
         url, params,
         throttle=_throttle,
         api_key=LAW_API_KEY,
-        max_retries=MAX_RETRIES,
+        max_retries=max_retries,
         backoff_base=BACKOFF_BASE_SECONDS,
     )
 
@@ -142,6 +174,7 @@ def search_laws(
 
     resp = _request(f"{LAW_API_BASE}/lawSearch.do", params)
     root = ElementTree.fromstring(resp.content)
+    _raise_if_api_error(root, f"law search query={query!r}")
 
     total = root.findtext("totalCnt", "0")
     page_num = root.findtext("page", "1")
@@ -165,7 +198,11 @@ def search_laws(
     return {"totalCnt": int(total), "page": int(page_num), "laws": laws}
 
 
-def get_law_detail(mst_id: str | int) -> dict:
+def get_law_detail(
+    mst_id: str | int,
+    *,
+    max_retries: int = MAX_RETRIES,
+) -> dict:
     """Fetch full law text and metadata by MST ID.
 
     Returns dict with metadata fields and 조문 (articles) list.
@@ -181,7 +218,11 @@ def get_law_detail(mst_id: str | int) -> dict:
         logger.debug(f"Cache hit: detail MST={mst_id}")
         raw = cached
     else:
-        resp = _request(f"{LAW_API_BASE}/lawService.do", params)
+        resp = _request(
+            f"{LAW_API_BASE}/lawService.do",
+            params,
+            max_retries=max_retries,
+        )
         raw = resp.content
 
     try:
@@ -194,10 +235,7 @@ def get_law_detail(mst_id: str | int) -> dict:
         raw = repaired  # cache the repaired form so the fix survives re-imports
         logger.warning("Repaired malformed XML for MST %s (unclosed 조문참고자료)", mst_id)
 
-    # Check for error response
-    error = root.findtext("result")
-    if error and "실패" in error:
-        raise RuntimeError(f"API error for MST {mst_id}: {error} - {root.findtext('msg', '')}")
+    _raise_if_api_error(root, f"MST {mst_id}")
 
     # Parse metadata
     metadata = {
@@ -290,11 +328,32 @@ def _parse_dot_date(raw: str) -> str:
     return raw.replace(".", "")
 
 
+def normalize_history_law_name(value: str) -> str:
+    """Normalize equivalent law-name typography for matching and deduplication."""
+
+    normalized = (value or "").translate(
+        str.maketrans({"·": "ㆍ", "・": "ㆍ", "･": "ㆍ"})
+    )
+    return re.sub(r"\s+", "", normalized)
+
+
+def _active_known_empty_history(law_name: str) -> dict | None:
+    """Return an active known-empty allowlist entry for a law name, if any."""
+
+    allowlist = load_empty_history_allowlist()
+    stem = cache.history_path_for(law_name).stem
+    entry = allowlist.get(stem) or allowlist.get(law_name)
+    if entry is None or date.fromisoformat(entry["expires_on"]) <= date.today():
+        return None
+    return entry
+
+
 def get_law_history(law_name: str, refresh: bool = False) -> list[dict]:
     """Fetch amendment history for a law via lsHistory HTML endpoint.
 
     Args:
-        law_name: Exact law name (e.g., "민법")
+        law_name: Law name (e.g., "민법"). History rows must match the full name
+            after whitespace normalization.
         refresh: If True, bypass the local history cache and refetch from the API.
             The cache is then rewritten with the fresh result. Use this when the
             upstream may have added new entries (e.g., 타법개정) that the locally
@@ -303,8 +362,6 @@ def get_law_history(law_name: str, refresh: bool = False) -> list[dict]:
     Returns list of dicts sorted oldest-first, each with:
     법령일련번호, 법령명한글, 제개정구분명, 법령구분, 공포번호, 공포일자, 시행일자
     """
-    import re
-
     if not refresh:
         cached = cache.get_history(law_name)
         if cached:
@@ -313,48 +370,88 @@ def get_law_history(law_name: str, refresh: bool = False) -> list[dict]:
         if cached == []:
             logging.info("rewriting poisoned empty cache for %s", law_name)
 
-    all_entries: list[dict] = []
-    page = 1
+    normalized_law_name = normalize_history_law_name(law_name)
 
-    while True:
-        resp = _request(f"{LAW_API_BASE}/lawSearch.do", {
-            "target": "lsHistory",
-            "query": law_name,
-            "type": "HTML",
-            "display": "100",
-            "page": str(page),
-        })
+    for attempt in range(1, _EMPTY_HISTORY_RETRIES + 1):
+        all_entries: list[dict] = []
+        candidate_names: set[str] = set()
+        page = 1
 
-        # Parse table rows: each row has MST in link + td columns
-        # Columns: 순번 | 법령명 | 소관부처 | 제개정구분 | 법종구분 | 공포번호 | 공포일자 | 시행일자 | 현행연혁
-        rows = re.findall(r"<tr[^>]*>(.*?)</tr>", resp.text, re.DOTALL)
-        for row in rows:
-            mst_match = re.search(r"MST=(\d+)", row)
-            if not mst_match:
-                continue
-            tds = re.findall(r"<td[^>]*>(.*?)</td>", row, re.DOTALL)
-            if len(tds) < 8:
-                continue
-            clean = [re.sub(r"<[^>]+>", "", td).strip() for td in tds]
-            # clean: [순번, 법령명, 소관부처, 제개정구분, 법종구분, 공포번호, 공포일자, 시행일자, 현행연혁]
-            name = clean[1]
-            if name != law_name:
-                continue
-            prom_date = _parse_dot_date(clean[6])
-            enf_date = _parse_dot_date(clean[7])
-            all_entries.append({
-                "법령일련번호": mst_match.group(1),
-                "법령명한글": name,
-                "제개정구분명": clean[3],
-                "법령구분": clean[4],
-                "공포번호": clean[5].replace("제 ", "").replace("호", "").strip(),
-                "공포일자": prom_date,
-                "시행일자": enf_date,
+        while True:
+            resp = _request(f"{LAW_API_BASE}/lawSearch.do", {
+                "target": "lsHistory",
+                "query": law_name,
+                "type": "HTML",
+                "display": "100",
+                "page": str(page),
             })
+            _raise_if_html_api_error(resp.text, f"law history query={law_name!r}")
 
-        if len(rows) < 10:
+            # Parse table rows: each row has MST in link + td columns
+            # Columns: 순번 | 법령명 | 소관부처 | 제개정구분 | 법종구분 | 공포번호 | 공포일자 | 시행일자 | 현행연혁
+            rows = re.findall(r"<tr[^>]*>(.*?)</tr>", resp.text, re.DOTALL)
+            for row in rows:
+                mst_match = re.search(r"MST=(\d+)", row)
+                if not mst_match:
+                    continue
+                tds = re.findall(r"<td[^>]*>(.*?)</td>", row, re.DOTALL)
+                if len(tds) < 8:
+                    continue
+                clean = [unescape(re.sub(r"<[^>]+>", "", td)).strip() for td in tds]
+                # clean: [순번, 법령명, 소관부처, 제개정구분, 법종구분, 공포번호, 공포일자, 시행일자, 현행연혁]
+                name = clean[1]
+                candidate_names.add(name)
+                if normalize_history_law_name(name) != normalized_law_name:
+                    continue
+                prom_date = _parse_dot_date(clean[6])
+                enf_date = _parse_dot_date(clean[7])
+                all_entries.append({
+                    "법령일련번호": mst_match.group(1),
+                    "법령명한글": name,
+                    "제개정구분명": clean[3],
+                    "법령구분": clean[4],
+                    "공포번호": clean[5].replace("제 ", "").replace("호", "").strip(),
+                    "공포일자": prom_date,
+                    "시행일자": enf_date,
+                })
+
+            if len(rows) < 10:
+                break
+            page += 1
+
+        if all_entries or attempt == _EMPTY_HISTORY_RETRIES:
             break
-        page += 1
+
+        known_empty = _active_known_empty_history(law_name)
+        if known_empty is not None:
+            logger.warning(
+                "Known empty history response for %s; reason=%s expires_on=%s; not retrying",
+                law_name,
+                known_empty["reason"],
+                known_empty["expires_on"],
+            )
+            break
+
+        if candidate_names:
+            candidates = sorted(candidate_names)
+            logger.warning(
+                "History response for %s had no exact name match; "
+                "candidate_count=%s candidate_sample=%s; not retrying",
+                law_name,
+                len(candidates),
+                candidates[:5],
+            )
+            break
+
+        delay = BACKOFF_BASE_SECONDS * attempt
+        logger.warning(
+            "Empty history response for %s; attempt %s/%s completed; retrying in %.1fs",
+            law_name,
+            attempt,
+            _EMPTY_HISTORY_RETRIES,
+            delay,
+        )
+        time.sleep(delay)
 
     # Sort oldest first
     all_entries.sort(key=lambda x: x["공포일자"])

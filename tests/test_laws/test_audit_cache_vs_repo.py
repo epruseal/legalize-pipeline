@@ -113,6 +113,43 @@ def test_audit_classifies_same_law_id_at_old_path_as_path_drift(tmp_path: Path):
     assert report.missing_content == []
 
 
+def test_audit_assigns_colliding_paths_by_first_lineage_order(tmp_path: Path):
+    cache_dir = tmp_path / ".cache"
+    repo_dir = tmp_path / "legalize-kr"
+
+    _write_history(
+        cache_dir,
+        "충돌법",
+        [
+            {"법령일련번호": "1", "제개정구분명": "제정"},
+            {"법령일련번호": "2", "제개정구분명": "제정"},
+            {"법령일련번호": "3", "제개정구분명": "일부개정"},
+        ],
+    )
+    _write_detail(cache_dir, "1", name="충돌법", law_id="A", prom_date="20200101")
+    _write_detail(cache_dir, "2", name="충돌법", law_id="B", prom_date="20210101")
+    _write_detail(cache_dir, "3", name="충돌법", law_id="A", prom_date="20250101")
+    _write_repo_markdown(
+        repo_dir,
+        "kr/충돌법/법률.md",
+        title="충돌법",
+        law_id="A",
+        mst="3",
+    )
+    _write_repo_markdown(
+        repo_dir,
+        "kr/충돌법/법률(법률).md",
+        title="충돌법",
+        law_id="B",
+        mst="2",
+    )
+
+    report = audit(cache_dir=cache_dir, repo_dir=repo_dir)
+
+    assert report.path_drift == []
+    assert report.missing_content == []
+
+
 def test_audit_reports_missing_content_when_same_law_id_is_absent(tmp_path: Path):
     cache_dir = tmp_path / ".cache"
     repo_dir = tmp_path / "legalize-kr"
@@ -288,6 +325,68 @@ def test_audit_reports_detail_files_not_referenced_by_history(tmp_path: Path):
     report = audit(cache_dir=cache_dir, repo_dir=repo_dir)
 
     assert report.detail_not_in_history == ["21"]
+
+
+def test_audit_uses_detail_outside_history_for_latest_lineage_path(tmp_path: Path):
+    cache_dir = tmp_path / ".cache"
+    repo_dir = tmp_path / "legalize-kr"
+
+    _write_history(
+        cache_dir,
+        "새이름법",
+        [{"법령일련번호": "1", "제개정구분명": "일부개정"}],
+    )
+    _write_detail(
+        cache_dir,
+        "1",
+        name="새이름법",
+        law_id="000001",
+        prom_date="20251230",
+    )
+    _write_detail(
+        cache_dir,
+        "2",
+        name="종전이름법",
+        law_id="000001",
+        prom_date="20260310",
+    )
+    _write_repo_markdown(
+        repo_dir,
+        "kr/종전이름법/법률.md",
+        title="종전이름법",
+        law_id="000001",
+        mst="2",
+    )
+
+    report = audit(cache_dir=cache_dir, repo_dir=repo_dir)
+
+    assert report.detail_not_in_history == ["2"]
+    assert report.path_drift == []
+    assert report.missing_content == []
+
+
+def test_audit_does_not_flag_newer_repo_mst_against_stale_cache(tmp_path: Path):
+    cache_dir = tmp_path / ".cache"
+    repo_dir = tmp_path / "legalize-kr"
+
+    _write_history(
+        cache_dir,
+        "새이름법",
+        [{"법령일련번호": "1", "제개정구분명": "일부개정"}],
+    )
+    _write_detail(cache_dir, "1", name="새이름법", law_id="000001")
+    _write_repo_markdown(
+        repo_dir,
+        "kr/종전이름법/법률.md",
+        title="종전이름법",
+        law_id="000001",
+        mst="2",
+    )
+
+    report = audit(cache_dir=cache_dir, repo_dir=repo_dir)
+
+    assert report.path_drift == []
+    assert report.missing_content == []
 
 
 def test_audit_reports_history_and_detail_parse_problems(tmp_path: Path):

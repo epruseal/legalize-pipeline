@@ -28,6 +28,11 @@ _IDS_PATH = PREC_CACHE_DIR / "precedent_ids.json"
 _KST = timezone(timedelta(hours=9))
 
 
+def _exit_if_errors(errors: int) -> None:
+    if errors:
+        raise SystemExit(f"precedent detail fetch failed: errors={errors}")
+
+
 def fetch_all_ids() -> list[str]:
     """Page through search API to collect all 판례일련번호 values."""
     all_ids: list[str] = []
@@ -155,6 +160,7 @@ def main():
                 logger.info(_snapshot_line("Progress"))
 
     logger.info(_snapshot_line("Done"))
+    _exit_if_errors(counter.snapshot()[2])
 
 
 if __name__ == "__main__":

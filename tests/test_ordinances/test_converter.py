@@ -18,7 +18,7 @@ SAMPLE_XML = """<?xml version="1.0" encoding="UTF-8"?>
   <공포일자>20210930</공포일자>
   <공포번호>7825</공포번호>
   <시행일자>20210930</시행일자>
-  <제개정구분명>일부개정</제개정구분명>
+  <제개정정보>일부개정</제개정정보>
   <자치법규분야명>일반공공행정</자치법규분야명>
   <담당부서명>법무담당관</담당부서명>
   <조문단위>
@@ -83,6 +83,69 @@ def test_xml_to_markdown_handles_real_ordinance_article_tags():
     assert "이 조례는 테스트를 목적으로 한다." in markdown
 
 
+def test_xml_to_markdown_preserves_structure_branch_and_article_titles():
+    xml = SAMPLE_XML.replace(
+        """<조문단위>
+    <조문번호>1</조문번호>
+    <조문제목>목적</조문제목>
+    <조문내용>제1조(목적) 이 조례는 테스트를 목적으로 한다.</조문내용>
+  </조문단위>""",
+        """<조문>
+    <조>
+      <조문번호>000000</조문번호>
+      <조문여부>N</조문여부>
+      <조제목></조제목>
+      <조내용>제1장 총칙</조내용>
+    </조>
+    <조>
+      <조문번호>000100</조문번호>
+      <조문여부>Y</조문여부>
+      <조제목>목적</조제목>
+      <조내용>제1조(목적) 이 조례는 테스트를 목적으로 한다.</조내용>
+    </조>
+    <조>
+      <조문번호>000702</조문번호>
+      <조문여부>Y</조문여부>
+      <조제목>재난안전예산조정위원회</조제목>
+      <조내용>제7조의2(재난안전예산조정위원회) 위원회를 둔다.</조내용>
+    </조>
+    <조>
+      <조문번호>001000</조문번호>
+      <조문여부>Y</조문여부>
+      <조제목>관계기관 등의 협조</조제목>
+      <조내용>제10조(관계기관 등의 협조) 협조를 요청할 수 있다.</조내용>
+    </조>
+    <조>
+      <조문번호>010000</조문번호>
+      <조문여부>Y</조문여부>
+      <조제목>자료관리</조제목>
+      <조내용>제100조(자료관리) 자료를 관리한다.</조내용>
+    </조>
+  </조문>""",
+    )
+
+    detail = converter.parse_ordinance_xml(xml)
+    assert [
+        (article["조문번호"], article["조문가지번호"], article["조문여부"], article["조문제목"])
+        for article in detail["articles"]
+    ] == [
+        ("0", "", "전문", ""),
+        ("1", "", "조문", "목적"),
+        ("7", "2", "조문", "재난안전예산조정위원회"),
+        ("10", "", "조문", "관계기관 등의 협조"),
+        ("100", "", "조문", "자료관리"),
+    ]
+
+    markdown = converter.ordinance_to_markdown(detail)
+    assert "## 제1장 총칙" in markdown
+    assert "##### 제0조" not in markdown
+    assert "##### 제702조" not in markdown
+    assert "##### 제1조 (목적)\n\n이 조례는 테스트를 목적으로 한다." in markdown
+    assert "##### 제7조의2 (재난안전예산조정위원회)\n\n위원회를 둔다." in markdown
+    assert "##### 제10조 (관계기관 등의 협조)" in markdown
+    assert "##### 제100조 (자료관리)\n\n자료를 관리한다." in markdown
+
+
 def test_xml_to_markdown_uses_addenda_when_articles_are_empty():
     xml = SAMPLE_XML.replace(
         """<조문단위>
@@ -94,14 +157,37 @@ def test_xml_to_markdown_uses_addenda_when_articles_are_empty():
     <부칙공포일자>20210930</부칙공포일자>
     <부칙공포번호>7825</부칙공포번호>
     <부칙내용>이 조례는 공포한 날부터 시행한다.</부칙내용>
+    <부칙공포일자>20220101</부칙공포일자>
+    <부칙공포번호>8000</부칙공포번호>
+    <부칙내용>이 조례는 2022년 1월 1일부터 시행한다.</부칙내용>
   </부칙>""",
     )
 
     _, markdown = converter.xml_to_markdown(xml)
 
     assert "본문출처: 'api-text'" in markdown
-    assert "## 부칙" in markdown
+    assert markdown.count("## 부칙") == 1
     assert "이 조례는 공포한 날부터 시행한다." in markdown
+    assert "이 조례는 2022년 1월 1일부터 시행한다." in markdown
+
+
+def test_xml_to_markdown_escapes_accidental_markdown_links_in_addenda():
+    xml = SAMPLE_XML.replace(
+        """<조문단위>
+    <조문번호>1</조문번호>
+    <조문제목>목적</조문제목>
+    <조문내용>제1조(목적) 이 조례는 테스트를 목적으로 한다.</조문내용>
+  </조문단위>""",
+        """<부칙>
+    <부칙공포일자>20210930</부칙공포일자>
+    <부칙공포번호>7825</부칙공포번호>
+    <부칙내용>[별표4](생략)을 적용한다.</부칙내용>
+  </부칙>""",
+    )
+
+    _, markdown = converter.xml_to_markdown(xml)
+
+    assert "\\[별표4](생략)" in markdown
 
 
 def test_xml_to_markdown_adds_attachment_links():
@@ -179,6 +265,36 @@ def test_compute_path_replaces_slashes():
         "자치법규명": 'A/B: "<규칙>"',
     })
     assert path == "서울특별시/강남구/규칙/A B 규칙/본문.md"
+
+
+def test_xml_to_markdown_preserves_unknown_jurisdiction_under_fallback_path():
+    """A genuinely unrecognised issuer must land in `_미상/` rather than fail."""
+    xml = SAMPLE_XML.replace("서울특별시</지자체기관명>", "없는광역시 어딘가구</지자체기관명>")
+
+    path, markdown = converter.xml_to_markdown(xml)
+
+    assert path == "_미상/없는광역시 어딘가구/조례/서울특별시 테스트 조례/본문.md"
+    assert _frontmatter(markdown)["지자체구분"] == {
+        "광역": "_미상",
+        "기초": "없는광역시 어딘가구",
+    }
+
+
+def test_xml_to_markdown_resolves_former_jurisdiction_marker():
+    """`(구)…` marks a pre-reorganisation issuer, so it belongs to the old entity.
+
+    Without the marker stripped this fell into `_미상/`, splitting one 교육청's
+    ordinances across two roots.
+    """
+    xml = SAMPLE_XML.replace("서울특별시</지자체기관명>", "(구)전라남도교육청</지자체기관명>")
+
+    path, markdown = converter.xml_to_markdown(xml)
+
+    assert path == "전라남도/_교육청/조례/서울특별시 테스트 조례/본문.md"
+    assert _frontmatter(markdown)["지자체구분"] == {
+        "광역": "전라남도",
+        "기초": "_교육청",
+    }
 
 
 def test_compute_path_uses_windows_safe_components():

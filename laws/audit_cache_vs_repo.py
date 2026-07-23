@@ -249,6 +249,19 @@ def audit(cache_dir: Path | None = None, repo_dir: Path | None = None) -> AuditR
             continue
         entries.append((mst, meta))
 
+    # A detail XML can remain valid even when the history cache is split across
+    # pre/post-rename law names and one side is missing. Include those details
+    # when choosing each lineage's latest path, while continuing to report them
+    # separately as detail_not_in_history for cache diagnostics.
+    detail_not_in_history = detail_msts - set(mst_to_amendment)
+    for mst in detail_not_in_history:
+        try:
+            meta = _metadata_from_xml(detail_dir / f"{mst}.xml", mst, "")
+        except ET.ParseError:
+            continue
+        if meta is not None:
+            entries.append((mst, meta))
+
     entries.sort(
         key=lambda item: entry_sort_key(
             item[1].get("공포일자", ""),
@@ -260,14 +273,16 @@ def audit(cache_dir: Path | None = None, repo_dir: Path | None = None) -> AuditR
 
     final_by_path: dict[str, CacheEntry] = {}
     latest_by_id: dict[str, tuple[str, dict[str, str]]] = {}
+    lineage_order: list[str] = []
     for mst, meta in entries:
-        latest_by_id[meta["법령ID"]] = (mst, meta)
+        law_id = meta["법령ID"]
+        if law_id not in latest_by_id:
+            lineage_order.append(law_id)
+        latest_by_id[law_id] = (mst, meta)
 
     assigned_paths: dict[str, str] = {}
-    for mst, meta in entries:
-        latest = latest_by_id.get(meta["법령ID"])
-        if latest != (mst, meta):
-            continue
+    for law_id in lineage_order:
+        mst, meta = latest_by_id[law_id]
         rel = _current_name_path(meta["법령명한글"], meta["법령구분"], meta["법령ID"], assigned_paths)
         final_by_path[rel] = CacheEntry(
             expected_path=rel,
@@ -297,6 +312,8 @@ def audit(cache_dir: Path | None = None, repo_dir: Path | None = None) -> AuditR
             for record in by_id.get(entry.law_id, [])
             if _body_has_content(record)
         ]
+        if any(_sort_mst_key(record.mst) > _sort_mst_key(entry.mst) for record in same_id):
+            continue
         if same_id:
             path_drift.append(
                 PathDrift(
@@ -329,7 +346,7 @@ def audit(cache_dir: Path | None = None, repo_dir: Path | None = None) -> AuditR
         malformed_history=malformed_history,
         missing_detail=sorted(missing_detail, key=_sort_mst_key),
         empty_or_invalid_detail_meta=sorted(empty_or_invalid_detail_meta, key=_sort_mst_key),
-        detail_not_in_history=sorted(detail_msts - set(mst_to_amendment), key=_sort_mst_key),
+        detail_not_in_history=sorted(detail_not_in_history, key=_sort_mst_key),
         path_drift=path_drift,
         missing_content=missing_content,
     )
@@ -421,6 +438,16 @@ def main() -> None:
         fail_on_path_drift=args.fail_on_path_drift or args.fail_on_new_path_drift,
         allowed_path_drift=allowed_path_drift,
     )
+    if reasons and report.path_drift:
+        for drift in report.path_drift:
+            if allowed_path_drift is not None and drift.expected_path in allowed_path_drift:
+                continue
+            print(
+                "path_drift_detail "
+                f"expected={drift.expected_path} "
+                f"actual={','.join(drift.actual_paths)} "
+                f"mst={drift.mst} law_id={drift.law_id}"
+            )
     if args.json:
         print(json.dumps(_report_to_jsonable(report), ensure_ascii=False, indent=2))
         if reasons:

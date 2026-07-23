@@ -42,24 +42,20 @@ def file_is_tracked(repo_dir: Path, file_path: Path) -> bool:
         return False
 
 
-def file_in_head(repo_dir: Path, file_path: Path) -> bool:
-    """Check whether a path exists in the HEAD commit.
-
-    ``file_is_tracked`` reads the index, so a path whose rename was already
-    staged reads as untracked even though HEAD still carries it. Committing
-    its deletion is legitimate, hence this separate HEAD check.
-    """
-    try:
-        _run_git("cat-file", "-e", f"HEAD:{file_path}", cwd=repo_dir)
-        return True
-    except RuntimeError:
-        return False
-
-
 def commit_exists(repo_dir: Path, grep_key: str) -> bool:
-    """Check if a commit containing grep_key already exists."""
+    """Check if a commit containing an exact grep_key line already exists."""
     try:
-        return bool(_run_git("log", "--oneline", "--all", f"--grep={grep_key}", cwd=repo_dir))
+        pattern = f"^{re.escape(grep_key)}$"
+        return bool(
+            _run_git(
+                "log",
+                "--oneline",
+                "--all",
+                "--extended-regexp",
+                f"--grep={pattern}",
+                cwd=repo_dir,
+            )
+        )
     except RuntimeError:
         return False
 
@@ -114,21 +110,26 @@ def commit_with_historical_date(
     *,
     author: str = BOT_AUTHOR,
     dedup_grep_key: str | None = None,
+    allow_empty: bool = False,
 ) -> bool:
     """Stage and commit files with GIT_AUTHOR_DATE/GIT_COMMITTER_DATE set."""
     repo_dir = Path(repo_dir)
     rel_paths = _relative_paths(repo_dir, file_paths)
-    # Resolved once: `git ls-files` is only consulted for paths absent from the
-    # worktree, and the result is reused when deciding what to stage below.
-    stageable = {
-        p: (repo_dir / p).exists() or file_is_tracked(repo_dir, p)
-        for p in rel_paths
-    }
-    missing = [
-        str(repo_dir / p)
-        for p in rel_paths
-        if not stageable[p] and not file_in_head(repo_dir, p)
-    ]
+    existing_paths: list[Path] = []
+    tracked_deletions: list[Path] = []
+    missing: list[str] = []
+    for path in rel_paths:
+        if (repo_dir / path).exists():
+            existing_paths.append(path)
+        elif file_is_tracked(repo_dir, path):
+            tracked_deletions.append(path)
+        else:
+            try:
+                already_staged = file_has_changes(repo_dir, [path])
+            except RuntimeError:
+                already_staged = False
+            if not already_staged:
+                missing.append(str(repo_dir / path))
     if missing:
         logger.error("File not found: %s", ", ".join(missing))
         return False
@@ -137,12 +138,25 @@ def commit_with_historical_date(
         logger.info("Commit already exists for %s, skipping", dedup_grep_key)
         return False
 
-    # A path that lives only in HEAD has its removal staged already (a prior
-    # run's `git add` moved it out of the index); `git add` would reject it as
-    # an unmatched pathspec. -A stages worktree deletions for the rest.
-    to_stage = [str(p) for p in rel_paths if stageable[p]]
-    if to_stage:
-        _run_git("add", "-A", "--", *to_stage, cwd=repo_dir)
+    if not rel_paths and allow_empty:
+        env = historical_commit_env(date, author=author)
+        _run_git(
+            "commit",
+            "--allow-empty",
+            "-m",
+            message,
+            "--author",
+            author,
+            cwd=repo_dir,
+            env=env,
+        )
+        logger.info("Committed empty revision date=%s", env["GIT_AUTHOR_DATE"])
+        return True
+
+    if existing_paths:
+        _run_git("add", "--", *[str(p) for p in existing_paths], cwd=repo_dir)
+    if tracked_deletions:
+        _run_git("add", "-u", "--", *[str(p) for p in tracked_deletions], cwd=repo_dir)
     if not file_has_changes(repo_dir, rel_paths):
         logger.info("No changes for %s, skipping", ", ".join(str(p) for p in rel_paths))
         return False

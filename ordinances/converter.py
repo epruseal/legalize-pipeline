@@ -7,11 +7,12 @@ from xml.etree import ElementTree
 
 import yaml
 
+from core.markdown import escape_accidental_markdown_links
 from laws.converter import articles_to_markdown
 
 from .config import STORAGE_TYPES, TYPE_CODES
 from .failures import quarantine_type
-from .jurisdictions import split_jurisdiction
+from .jurisdictions import UnknownJurisdiction, split_jurisdiction
 
 
 class UnsupportedOrdinanceType(ValueError):
@@ -71,6 +72,24 @@ def _normalize_article_number(value: str) -> str:
             return str(number // 100)
         return str(number)
     return raw
+
+
+def _split_article_number(value: str, branch_value: str = "") -> tuple[str, str]:
+    raw = (value or "").strip()
+    raw_branch = (branch_value or "").strip()
+    branch = str(int(raw_branch)) if raw_branch.isdigit() and int(raw_branch) else ""
+    if raw_branch and not raw_branch.isdigit():
+        branch = raw_branch
+    if len(raw) == 6 and raw.isdigit():
+        number = str(int(raw[:4]))
+        encoded_branch = str(int(raw[4:])) if int(raw[4:]) else ""
+        return number, branch or encoded_branch
+    return _normalize_article_number(raw), branch
+
+
+def _normalize_article_kind(value: str) -> str:
+    raw = (value or "").strip()
+    return {"Y": "조문", "N": "전문"}.get(raw.upper(), raw)
 
 
 def _text(root: ElementTree.Element, path: str) -> str:
@@ -152,6 +171,13 @@ def safe_path_part(value: str, *, max_bytes: int = 180, suffix_on_truncate: str 
     return text or "_"
 
 
+def _split_jurisdiction_for_output(value: str) -> tuple[str, str]:
+    try:
+        return split_jurisdiction(value)
+    except UnknownJurisdiction:
+        return "_미상", safe_path_part(value)
+
+
 _assigned_paths: dict[str, str] = {}
 
 
@@ -181,6 +207,36 @@ def _attachment_nodes(root: ElementTree.Element) -> list[dict]:
     return attachments
 
 
+def _addenda_nodes(root: ElementTree.Element) -> list[dict]:
+    unit_nodes = root.findall(".//부칙단위")
+    if unit_nodes:
+        return [
+            {
+                "부칙공포일자": item.findtext("부칙공포일자", ""),
+                "부칙공포번호": item.findtext("부칙공포번호", ""),
+                "부칙내용": item.findtext("부칙내용", ""),
+            }
+            for item in unit_nodes
+            if (item.findtext("부칙내용", "") or "").strip()
+        ]
+
+    addenda = []
+    for container in root.findall(".//부칙"):
+        dates = container.findall("부칙공포일자")
+        numbers = container.findall("부칙공포번호")
+        contents = container.findall("부칙내용")
+        for index, content in enumerate(contents):
+            text = content.text or ""
+            if not text.strip():
+                continue
+            addenda.append({
+                "부칙공포일자": dates[index].text or "" if index < len(dates) else "",
+                "부칙공포번호": numbers[index].text or "" if index < len(numbers) else "",
+                "부칙내용": text,
+            })
+    return addenda
+
+
 def parse_ordinance_xml(raw_xml: bytes | str) -> dict:
     root = ElementTree.fromstring(raw_xml)
     metadata = {
@@ -192,34 +248,31 @@ def parse_ordinance_xml(raw_xml: bytes | str) -> dict:
         "공포일자": _text(root, ".//공포일자"),
         "공포번호": _text(root, ".//공포번호"),
         "시행일자": _text(root, ".//시행일자"),
-        "제개정구분": normalize_text(_text(root, ".//제개정구분명") or _text(root, ".//제개정구분")),
+        "제개정구분": normalize_text(
+            _text(root, ".//제개정정보")
+            or _text(root, ".//제개정구분명")
+            or _text(root, ".//제개정구분")
+        ),
         "자치법규분야": normalize_text(_text(root, ".//자치법규분야명")),
         "담당부서": normalize_text(_text(root, ".//담당부서명")),
     }
     articles = []
-    for jo in [*root.findall(".//조문단위"), *root.findall(".//조")]:
+    for jo in (node for node in root.iter() if node.tag in {"조문단위", "조"}):
+        number, branch_number = _split_article_number(
+            jo.findtext("조문번호", ""), jo.findtext("조문가지번호", "")
+        )
         articles.append({
-            "조문번호": _normalize_article_number(jo.findtext("조문번호", "")),
-            "조문가지번호": jo.findtext("조문가지번호", ""),
-            "조문여부": jo.findtext("조문여부", ""),
+            "조문번호": number,
+            "조문가지번호": branch_number,
+            "조문여부": _normalize_article_kind(jo.findtext("조문여부", "")),
             "조문제목": jo.findtext("조문제목", "") or jo.findtext("조제목", ""),
             "조문내용": jo.findtext("조문내용", "") or jo.findtext("조내용", ""),
             "항": [],
         })
-    addenda_nodes = root.findall(".//부칙단위") or root.findall(".//부칙")
-    addenda = [
-        {
-            "부칙공포일자": item.findtext("부칙공포일자", ""),
-            "부칙공포번호": item.findtext("부칙공포번호", ""),
-            "부칙내용": item.findtext("부칙내용", ""),
-        }
-        for item in addenda_nodes
-        if (item.findtext("부칙내용", "") or "").strip()
-    ]
     return {
         "metadata": metadata,
         "articles": articles,
-        "addenda": addenda,
+        "addenda": _addenda_nodes(root),
         "attachments": _attachment_nodes(root),
         "raw_xml": raw_xml,
     }
@@ -232,7 +285,7 @@ def build_frontmatter(metadata: dict, attachments: list[dict] | None = None) -> 
         quarantine_type(ordinance_id, ordinance_type)
         raise UnsupportedOrdinanceType(ordinance_type)
 
-    gwangyeok, gicho = split_jurisdiction(metadata.get("지자체기관명", ""))
+    gwangyeok, gicho = _split_jurisdiction_for_output(metadata.get("지자체기관명", ""))
     prom_date, prom_date_corrected = _promulgation_date(metadata.get("공포일자", ""))
     fm = {
         "자치법규ID": ordinance_id,
@@ -260,7 +313,7 @@ def compute_path(metadata: dict, *, use_registry: bool = False) -> str:
     ordinance_type = metadata.get("자치법규종류", "")
     if ordinance_type not in STORAGE_TYPES:
         raise UnsupportedOrdinanceType(ordinance_type)
-    gwangyeok, gicho = split_jurisdiction(metadata.get("지자체기관명", ""))
+    gwangyeok, gicho = _split_jurisdiction_for_output(metadata.get("지자체기관명", ""))
     ordinance_id = safe_path_part(str(metadata.get("자치법규ID", "")))
     name = safe_path_part(metadata.get("자치법규명", ""), suffix_on_truncate=ordinance_id)
     base = f"{safe_path_part(gwangyeok)}/{safe_path_part(gicho)}/{ordinance_type}/{name}/본문.md"
@@ -310,7 +363,7 @@ def ordinance_to_markdown(detail: dict) -> str:
     if articles_md.strip():
         body_parts.append(articles_md)
     for item in detail.get("addenda", []):
-        content = (item.get("부칙내용") or "").strip()
+        content = escape_accidental_markdown_links((item.get("부칙내용") or "").strip())
         if content:
             if "## 부칙" not in body_parts:
                 body_parts.extend(["## 부칙", ""])
