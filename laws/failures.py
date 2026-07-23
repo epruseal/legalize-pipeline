@@ -19,6 +19,9 @@ FAILED_FILE = CACHE_ROOT / ".failed_msts.json"
 
 _LOCK = threading.Lock()
 
+# Lazily loaded key set for clear_failed()'s fast path; None until first use.
+_FAILED_KEYS: set[str] | None = None
+
 EXCEPTION_REASON_MAP: dict[type[BaseException], str] = {
     ValueError: "empty_body",
     RuntimeError: "api_error",
@@ -65,6 +68,7 @@ def mark_failed(
     law_name: str = "",
 ) -> None:
     """Record a failed MST in the failed_msts section."""
+    global _FAILED_KEYS
     with _LOCK:
         data = _load()
         data["failed_msts"][str(mst)] = {
@@ -75,6 +79,30 @@ def mark_failed(
             "failed_at": time.time(),
         }
         _write(data)
+        if _FAILED_KEYS is not None:
+            _FAILED_KEYS.add(str(mst))
+
+
+def clear_failed(mst: str) -> bool:
+    """Drop a recorded failure once the MST imports successfully.
+
+    Without this the ledger keeps a stale entry forever and the CI delta gate
+    keeps reporting an already-fixed MST as a new failure. The membership test
+    runs against a cached key set so the common (no prior failure) path costs
+    no disk I/O.
+    """
+    global _FAILED_KEYS
+    with _LOCK:
+        if _FAILED_KEYS is None:
+            _FAILED_KEYS = set(_load()["failed_msts"])
+        if str(mst) not in _FAILED_KEYS:
+            return False
+        data = _load()
+        removed = data["failed_msts"].pop(str(mst), None) is not None
+        if removed:
+            _write(data)
+        _FAILED_KEYS.discard(str(mst))
+        return removed
 
 
 def mark_search_miss(
