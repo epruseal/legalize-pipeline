@@ -100,11 +100,16 @@ def _guard_against_shared_cache_pollution():
         after = _snapshot_dir(directory)
         added = sorted(set(after) - set(before))
         changed = sorted(k for k in set(after) & set(before) if after[k] != before[k])
-        if added or changed:
-            preview = (added + changed)[:10]
+        # Deletions matter most: prune_details() wipes every cached detail not in
+        # the set it is handed, so an unisolated call can empty a corpus cache
+        # that costs hours to refetch — and it leaves nothing behind for an
+        # added/changed check to notice.
+        removed = sorted(set(before) - set(after))
+        if added or changed or removed:
+            preview = (added + changed + removed)[:10]
             violations.append(
-                f"{label} ({directory}): added={len(added)} changed={len(changed)}; "
-                f"examples={preview}"
+                f"{label} ({directory}): added={len(added)} changed={len(changed)} "
+                f"removed={len(removed)}; examples={preview}"
             )
     for label, path, before in file_snapshots:
         if _snapshot_file(path) != before:
