@@ -51,15 +51,40 @@ def _guard_against_shared_cache_pollution():
     / `foo법` invariant violation. This fixture snapshots the cache dirs at
     session start and diffs at teardown.
     """
+    import admrules.cache as adm_cache
+    import admrules.checkpoint as adm_checkpoint
     import laws.cache as law_cache
+    import ordinances.cache as ord_cache
+    import ordinances.checkpoint as ord_checkpoint
     import precedents.cache as prec_cache
 
     guarded: list[tuple[str, Path]] = [
         ("laws.cache.CACHE_DIR/history", law_cache.CACHE_DIR / "history"),
         ("laws.cache.CACHE_DIR/detail", law_cache.CACHE_DIR / "detail"),
         ("precedents.cache.PREC_CACHE_DIR", prec_cache.PREC_CACHE_DIR),
+        ("admrules.cache.CACHE_DIR", adm_cache.CACHE_DIR),
+        ("ordinances.cache.CACHE_DIR", ord_cache.CACHE_DIR),
     ]
+    # Crawl indexes and checkpoints are single files rather than directories,
+    # and are the ones that actually bit us: a test that skips isolating them
+    # reads 860k live entries out of the developer's `.ordinance-index.jsonl`,
+    # which is why the same suite failed 4 or 6 tests depending on the machine.
+    guarded_files: list[tuple[str, Path]] = [
+        ("admrules.checkpoint.INDEX_FILE", adm_checkpoint.INDEX_FILE),
+        ("admrules.checkpoint.CHECKPOINT_FILE", adm_checkpoint.CHECKPOINT_FILE),
+        ("ordinances.checkpoint.INDEX_FILE", ord_checkpoint.INDEX_FILE),
+        ("ordinances.checkpoint.CHECKPOINT_FILE", ord_checkpoint.CHECKPOINT_FILE),
+    ]
+
+    def _snapshot_file(path: Path) -> tuple[int, int] | None:
+        try:
+            st = path.stat()
+        except OSError:
+            return None
+        return (st.st_size, st.st_mtime_ns)
+
     snapshots = [(label, d, _snapshot_dir(d)) for label, d in guarded]
+    file_snapshots = [(label, p, _snapshot_file(p)) for label, p in guarded_files]
 
     yield
 
@@ -74,6 +99,9 @@ def _guard_against_shared_cache_pollution():
                 f"{label} ({directory}): added={len(added)} changed={len(changed)}; "
                 f"examples={preview}"
             )
+    for label, path, before in file_snapshots:
+        if _snapshot_file(path) != before:
+            violations.append(f"{label} ({path}): mutated")
 
     if violations:
         raise AssertionError(

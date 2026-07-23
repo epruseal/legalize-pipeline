@@ -1,6 +1,21 @@
 """Tests for ordinances/fetch_cache.py."""
 
+import pytest
+
 from ordinances import fetch_cache
+
+
+@pytest.fixture(autouse=True)
+def _no_saved_crawl_index(monkeypatch):
+    """Force the crawl path.
+
+    ``_crawl_search`` short-circuits on a saved crawl index when no date_range
+    is given. Without this the tests read whatever ``.ordinance-index.jsonl``
+    the real CACHE_ROOT holds (860k live entries) — or, in a clean cache, the
+    one an earlier test in the same session just wrote.
+    """
+    monkeypatch.setattr(fetch_cache.checkpoint, "load_crawl_index", lambda *a, **kw: None)
+    monkeypatch.setattr(fetch_cache.checkpoint, "save_crawl_index", lambda *a, **kw: None)
 
 
 def test_fetch_all_current_pages_until_total(monkeypatch):
