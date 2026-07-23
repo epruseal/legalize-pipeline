@@ -56,6 +56,7 @@ def _guard_against_shared_cache_pollution():
     import admrules.cache as adm_cache
     import admrules.checkpoint as adm_checkpoint
     import laws.cache as law_cache
+    import laws.failures as law_failures
     import ordinances.cache as ord_cache
     import ordinances.checkpoint as ord_checkpoint
     import precedents.cache as prec_cache
@@ -76,6 +77,10 @@ def _guard_against_shared_cache_pollution():
         # 테스트가 실제 쿼터 원장에 허위 소비를 기록하면 그날의 수집이
         # 가드레일에 막힐 수 있다.
         ("core.quota_budget.STATE_FILE", quota_budget.STATE_FILE),
+        # 실패 원장은 CI 델타 게이트의 입력이다. 테스트가 남긴 항목은
+        # 다음 수집에서 신규 실패로 오보된다.
+        ("laws.failures.FAILED_FILE", law_failures.FAILED_FILE),
+        ("laws.failures.LOCK_FILE", law_failures.LOCK_FILE),
     ]
 
     def _snapshot_file(path: Path) -> tuple[int, int] | None:
@@ -114,17 +119,22 @@ def _guard_against_shared_cache_pollution():
 
 
 @pytest.fixture(autouse=True)
-def _isolate_quota_ledger(tmp_path, monkeypatch):
-    """Keep the shared quota ledger out of every test's reach.
+def _isolate_shared_ledgers(tmp_path, monkeypatch):
+    """Keep the shared ledgers out of every test's reach.
 
-    ``record_requests`` is reached indirectly from many crawl paths, so relying
-    on each test to stub it lets one omission write a phantom day's consumption
-    into the developer's real ledger — which can then block that day's fetch on
-    the headroom guardrail.
+    Both are reached indirectly from many code paths, so relying on each test to
+    stub them lets one omission corrupt developer state: a phantom day's
+    consumption blocks that day's fetch on the headroom guardrail, and a stray
+    failure entry is reported as a new regression by the CI delta gate.
     """
     import core.quota_budget as quota_budget
+    import laws.failures as law_failures
 
     monkeypatch.setattr(quota_budget, "STATE_FILE", tmp_path / "quota.json")
+    monkeypatch.setattr(law_failures, "FAILED_FILE", tmp_path / "failed_msts.json")
+    monkeypatch.setattr(law_failures, "LOCK_FILE", tmp_path / "failed_msts.lock")
+    monkeypatch.setattr(law_failures, "_FAILED_KEYS", None)
+    monkeypatch.setattr(law_failures, "_FAILED_STAMP", None)
 
 
 @pytest.fixture
