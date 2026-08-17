@@ -99,6 +99,19 @@ def test_make_request_retry_on_429():
 
 
 @responses_lib.activate
+def test_make_request_retries_404_by_default():
+    responses_lib.add(responses_lib.GET, TEST_URL, status=404)
+    responses_lib.add(responses_lib.GET, TEST_URL, body=b"<ok/>", status=200)
+
+    resp = make_request(
+        TEST_URL, {}, throttle=_throttle(), api_key="k", max_retries=1, backoff_base=0.0
+    )
+
+    assert resp.status_code == 200
+    assert len(responses_lib.calls) == 2
+
+
+@responses_lib.activate
 def test_make_request_exceeds_retries():
     """After exhausting retries, raises RuntimeError."""
     for _ in range(4):
