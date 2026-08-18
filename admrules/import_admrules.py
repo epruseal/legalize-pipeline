@@ -5,6 +5,8 @@ import logging
 from pathlib import Path
 from xml.etree import ElementTree
 
+from core.xml import parse_xml
+
 import yaml
 
 from core.atomic_io import atomic_write_text
@@ -29,7 +31,7 @@ def _text(root: ElementTree.Element, tag: str) -> str:
 
 
 def metadata_from_raw(raw_xml: bytes | str) -> dict:
-    root = ElementTree.fromstring(raw_xml)
+    root, _raw = parse_xml(raw_xml, context="admrule import")
     return {
         "행정규칙ID": _text(root, "행정규칙ID"),
         "행정규칙일련번호": _text(root, "행정규칙일련번호") or _text(root, "ID"),

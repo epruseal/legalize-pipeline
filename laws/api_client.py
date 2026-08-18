@@ -20,6 +20,7 @@ from .config import (
 from .history_allowlist import load_allowlist as load_empty_history_allowlist
 from core.http import make_request
 from core.throttle import Throttle
+from core.xml import parse_xml
 
 logger = logging.getLogger(__name__)
 
@@ -173,7 +174,7 @@ def search_laws(
         params["ancYd"] = f"{date_from}~{date_to}"
 
     resp = _request(f"{LAW_API_BASE}/lawSearch.do", params)
-    root = ElementTree.fromstring(resp.content)
+    root, _raw = parse_xml(resp.content, context=f"law search query={query!r}")
     _raise_if_api_error(root, f"law search query={query!r}")
 
     total = root.findtext("totalCnt", "0")
@@ -226,7 +227,7 @@ def get_law_detail(
         raw = resp.content
 
     try:
-        root = ElementTree.fromstring(raw)
+        root, raw = parse_xml(raw, context=f"law detail MST={mst_id}")
     except ElementTree.ParseError:
         repaired = repair_law_xml(raw)
         if repaired is raw:

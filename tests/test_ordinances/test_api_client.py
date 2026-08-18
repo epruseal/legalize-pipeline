@@ -83,6 +83,19 @@ def test_search_ordinances_retries_malformed_xml(monkeypatch):
     assert len(calls) == 2
 
 
+def test_search_ordinances_repairs_undefined_entity(monkeypatch):
+    monkeypatch.setattr(
+        api_client,
+        "_request",
+        lambda url, params: Response(b"<LawSearch><totalCnt>0</totalCnt><page>1</page><msg>A & B</msg></LawSearch>"),
+    )
+
+    result = api_client.search_ordinances()
+
+    assert result["totalCnt"] == 0
+    assert b"A &amp; B" in result["raw_xml"]
+
+
 def test_search_ordinances_stops_after_malformed_xml_retries(monkeypatch):
     calls = []
 

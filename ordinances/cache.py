@@ -12,6 +12,8 @@ import threading
 from pathlib import Path
 from xml.etree import ElementTree
 
+from core.xml import parse_xml
+
 from core.atomic_io import atomic_write_bytes, atomic_write_text
 
 from .config import ORDINANCE_CACHE_DIR
@@ -32,7 +34,8 @@ def detail_path(cache_key: str, *, historical: bool = False) -> Path:
 
 def _serial_from_raw(raw: bytes) -> str:
     try:
-        return (ElementTree.fromstring(raw).findtext(".//자치법규일련번호") or "").strip()
+        root, _repaired = parse_xml(raw, context="ordinance cache")
+        return (root.findtext(".//자치법규일련번호") or "").strip()
     except ElementTree.ParseError:
         return ""
 

@@ -5,6 +5,8 @@ import re
 import unicodedata
 from xml.etree import ElementTree
 
+from core.xml import parse_xml
+
 import yaml
 
 from core.markdown import escape_accidental_markdown_links
@@ -75,7 +77,7 @@ def normalize_dangi_yyyymmdd(date: str) -> str:
 
 def parse_precedent_xml(raw_xml: bytes) -> dict | None:
     """Parse PrecService XML. Returns None if root tag is not PrecService."""
-    root = ElementTree.fromstring(raw_xml)
+    root, _raw = parse_xml(raw_xml, context="precedent conversion")
     if root.tag != "PrecService":
         return None
     parsed = {field: (root.findtext(field) or "") for field in _15_FIELDS}

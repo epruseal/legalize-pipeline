@@ -14,6 +14,8 @@ import argparse
 import logging
 from xml.etree import ElementTree
 
+from core.xml import parse_xml
+
 from . import cache
 from .config import PREC_CACHE_DIR
 
@@ -32,7 +34,7 @@ def run(dry_run: bool = False) -> dict:
 
     for i, path in enumerate(xml_files, 1):
         try:
-            root = ElementTree.parse(path).getroot()
+            root, _raw = parse_xml(path.read_bytes(), context=f"precedent cache {path.name}")
         except ElementTree.ParseError as e:
             logger.warning(f"Parse error on {path.name}: {e}")
             parse_errors += 1

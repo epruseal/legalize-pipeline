@@ -7,6 +7,7 @@ import requests
 
 from core.http import make_request
 from core.throttle import Throttle
+from core.xml import parse_xml
 
 from . import cache
 from .config import (
@@ -59,7 +60,7 @@ def search_precedents(
         params["prncYd"] = date_range
 
     resp = _request(f"{LAW_API_BASE}/lawSearch.do", params)
-    root = ElementTree.fromstring(resp.content)
+    root, _raw = parse_xml(resp.content, context=f"prec search page {page}")
 
     # Check for error response
     result = root.findtext("result")
@@ -128,7 +129,7 @@ def get_precedent_detail(prec_id: str | int, *, refresh: bool = False) -> bytes:
     resp = _request(f"{LAW_API_BASE}/lawService.do", params)
     raw = resp.content
 
-    root = ElementTree.fromstring(raw)
+    root, raw = parse_xml(raw, context=f"prec detail ID={prec_id}")
     result = root.findtext("result")
     if result and "실패" in result:
         raise RuntimeError(f"API error for prec_id {prec_id}: {result} - {root.findtext('msg', '')}")

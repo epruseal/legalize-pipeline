@@ -6,6 +6,8 @@ import unicodedata
 from pathlib import Path
 from xml.etree import ElementTree
 
+from core.xml import parse_xml
+
 import yaml
 
 from core.markdown import escape_accidental_markdown_links
@@ -584,7 +586,7 @@ def _render_structured_body(title: str, body: str) -> str:
 
 
 def xml_to_markdown(raw_xml: bytes | str, attachment_metadata: list[dict] | None = None) -> str:
-    root = ElementTree.fromstring(raw_xml)
+    root, _raw = parse_xml(raw_xml, context="admrule conversion")
     metadata = _metadata_from_xml(root)
     attachments = attachment_metadata if attachment_metadata is not None else _attachment_nodes(root)
     body = _plain_text(root)
