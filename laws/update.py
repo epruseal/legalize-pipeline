@@ -30,6 +30,7 @@ from .converter import (
     law_to_markdown,
     reset_path_registry,
 )
+from .failures import clear_failed
 from .git_engine import commit_law, commit_law_changes
 from core.git_engine import commit_exists
 from .import_laws import build_commit_msg
@@ -357,7 +358,15 @@ def update(
         added = 0
         backfilled = 0
         history_errors = 0
-        for name in sorted(unique_names):
+        history_names = sorted(unique_names)
+        for index, name in enumerate(history_names, 1):
+            if index == 1 or index % 5 == 0:
+                logger.info(
+                    "lsHistory augmentation progress: %s/%s laws (errors=%s)",
+                    index,
+                    len(history_names),
+                    history_errors,
+                )
             try:
                 history = get_law_history(name, refresh=True)
             except Exception as e:
@@ -438,6 +447,7 @@ def update(
             # rewriting Markdown so duplicate search results cannot leave dirty,
             # uncommitted files behind when commit_law's defensive dedup skips.
             if not dry_run and _commit_exists_for_mst(mst):
+                clear_failed(mst)
                 logger.info(
                     "  [%s/%s] Commit already exists for MST=%s, skipping",
                     i,
@@ -492,6 +502,7 @@ def update(
                 extra_paths=extra_commit_paths,
             )
             if result:
+                clear_failed(mst)
                 mark_processed(mst)
                 committed += 1
                 snapshot = current_snapshots.get(str(law_id))
