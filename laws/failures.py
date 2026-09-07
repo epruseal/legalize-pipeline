@@ -14,6 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from core.atomic_io import atomic_write_text
+from requests.exceptions import RequestException
 
 from .config import CACHE_ROOT
 
@@ -33,6 +34,8 @@ _FAILED_STAMP: tuple[int, int] | None = None
 
 EXCEPTION_REASON_MAP: dict[type[BaseException], str] = {
     ValueError: "empty_body",
+    # requests exceptions also inherit OSError; keep this before OSError.
+    RequestException: "api_error",
     RuntimeError: "api_error",
     OSError: "io_error",
     KeyError: "metadata_missing",

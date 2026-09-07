@@ -75,11 +75,23 @@ def test_backfilling_an_older_version_is_flagged(law_repo, quoted):
 
 
 def test_same_date_lower_promulgation_number_is_a_regression(law_repo):
+    """MST 는 더 크지만 공포번호가 낮다 — 공포번호가 실제로 비교돼야 잡힌다."""
     _commit_version(law_repo, "kr/민법/법률.md", "300", "2024-01-15", "00031")
 
     tracker = VersionTracker()
     tracker.seen("kr/민법/법률.md")
-    tracker.committed("kr/민법/법률.md", {"공포일자": "20240115", "공포번호": "00030"}, "299")
+    tracker.committed("kr/민법/법률.md", {"공포일자": "20240115", "공포번호": "00030"}, "301")
+
+    assert [p for p, _, _ in tracker.regressed()] == ["kr/민법/법률.md"]
+
+
+def test_same_date_and_number_lower_mst_is_a_regression(law_repo):
+    """공포번호까지 같으면 MST 가 마지막 tie-break 다."""
+    _commit_version(law_repo, "kr/민법/법률.md", "300", "2024-01-15", "00031")
+
+    tracker = VersionTracker()
+    tracker.seen("kr/민법/법률.md")
+    tracker.committed("kr/민법/법률.md", {"공포일자": "20240115", "공포번호": "00031"}, "299")
 
     assert [p for p, _, _ in tracker.regressed()] == ["kr/민법/법률.md"]
 
@@ -94,8 +106,19 @@ def test_same_date_higher_promulgation_number_is_not_a_regression(law_repo):
     assert tracker.regressed() == []
 
 
-def test_zero_padded_promulgation_number_compares_numerically(law_repo):
-    """'00031' and '31' are the same amendment, not a regression."""
+def test_promulgation_number_compares_numerically_not_lexically(law_repo):
+    """31 > 8 이지만 문자열로는 '31' < '8' 이다 — 문자 비교면 허위 퇴행이 뜬다."""
+    _commit_version(law_repo, "kr/민법/법률.md", "300", "2024-01-15", "8")
+
+    tracker = VersionTracker()
+    tracker.seen("kr/민법/법률.md")
+    tracker.committed("kr/민법/법률.md", {"공포일자": "20240115", "공포번호": "31"}, "301")
+
+    assert tracker.regressed() == []
+
+
+def test_zero_padded_promulgation_number_is_the_same_version(law_repo):
+    """'00031' 과 '31' 은 같은 개정이므로 퇴행이 아니다."""
     _commit_version(law_repo, "kr/민법/법률.md", "300", "2024-01-15", "00031")
 
     tracker = VersionTracker()

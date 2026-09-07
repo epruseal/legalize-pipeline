@@ -14,6 +14,7 @@ from typing import Any
 
 from . import cache
 from .config import LAW_REPO
+from .converter import normalize_law_name
 
 DEFAULT_RECENT_DAYS = 365
 MST_RE = re.compile(r"법령MST:\s*(\d+)")
@@ -92,6 +93,7 @@ class AuditReport:
     history_names: int
     historical_msts: int
     git_msts: int
+    git_msts_missing_from_history: list[GitRecord]
     missing_in_git_with_valid_detail: list[MissingHistoryMst]
     missing_in_git_without_valid_detail: list[MissingHistoryMst]
     commit_metadata_mismatches: list[CommitMetadataMismatch]
@@ -227,7 +229,7 @@ def _expected_git_date(promulgation_date: str) -> str:
 
 
 def _normalize_law_name(value: str) -> str:
-    return re.sub(r"\s+", "", value.strip())
+    return re.sub(r"\s+", "", normalize_law_name(value.strip()))
 
 
 def _normalize_promulgation_number(value: str) -> str:
@@ -412,6 +414,10 @@ def audit(
     history_records, history_names = _load_history_records(cache_dir)
     git_records = _git_commit_records(repo_dir)
     git_msts = set(git_records)
+    git_msts_missing_from_history = [
+        git_records[mst]
+        for mst in sorted(git_msts - set(history_records), key=_sort_mst_key)
+    ]
 
     missing_with_detail: list[MissingHistoryMst] = []
     missing_without_detail: list[MissingHistoryMst] = []
@@ -442,6 +448,7 @@ def audit(
         history_names=history_names,
         historical_msts=len(history_records),
         git_msts=len(git_msts),
+        git_msts_missing_from_history=git_msts_missing_from_history,
         missing_in_git_with_valid_detail=missing_with_detail,
         missing_in_git_without_valid_detail=missing_without_detail,
         commit_metadata_mismatches=(
@@ -465,12 +472,21 @@ def failure_reasons(
     report: AuditReport,
     *,
     fail_on_any_valid_missing: bool = False,
+    fail_on_git_msts_missing_from_history: bool = False,
     fail_on_long_term_missing: bool = False,
     fail_on_commit_metadata_mismatch: bool = False,
 ) -> list[str]:
     """Return audit failure reasons for CLI/CI gates."""
 
     reasons: list[str] = []
+    if (
+        fail_on_git_msts_missing_from_history
+        and report.git_msts_missing_from_history
+    ):
+        reasons.append(
+            "git_msts_missing_from_history="
+            f"{len(report.git_msts_missing_from_history)}"
+        )
     if fail_on_any_valid_missing and report.missing_in_git_with_valid_detail:
         reasons.append(
             "missing_in_git_with_valid_detail="
@@ -517,6 +533,11 @@ def main() -> None:
         help="Exit non-zero when any valid-detail history MST is absent from Git",
     )
     parser.add_argument(
+        "--fail-on-git-msts-missing-from-history",
+        action="store_true",
+        help="Exit non-zero when Git contains MSTs absent from cached history",
+    )
+    parser.add_argument(
         "--fail-on-commit-metadata-mismatch",
         action="store_true",
         help="Exit non-zero when matching Git commits disagree with history metadata",
@@ -534,6 +555,9 @@ def main() -> None:
     reasons = failure_reasons(
         report,
         fail_on_any_valid_missing=args.fail_on_any_valid_missing,
+        fail_on_git_msts_missing_from_history=(
+            args.fail_on_git_msts_missing_from_history
+        ),
         fail_on_long_term_missing=args.fail_on_long_term_missing,
         fail_on_commit_metadata_mismatch=args.fail_on_commit_metadata_mismatch,
     )
@@ -547,6 +571,10 @@ def main() -> None:
     print(f"history_names={report.history_names}")
     print(f"historical_msts={report.historical_msts}")
     print(f"git_msts={report.git_msts}")
+    print(
+        "git_msts_missing_from_history="
+        f"{len(report.git_msts_missing_from_history)}"
+    )
     print(f"missing_in_git_with_valid_detail={len(report.missing_in_git_with_valid_detail)}")
     print(f"missing_in_git_without_valid_detail={len(report.missing_in_git_without_valid_detail)}")
     print(f"commit_metadata_checked={report.commit_metadata_checked}")

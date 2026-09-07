@@ -20,7 +20,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from . import cache, detail_failure_allowlist
+from . import audit_history_vs_git, cache, detail_failure_allowlist
 from .api_client import (
     get_law_detail,
     get_law_history,
@@ -163,6 +163,23 @@ def _assert_no_empty_history_cache() -> None:
         raise RuntimeError("History cache invariant violated: " + "; ".join(problems))
 
 
+def _load_all_cached_history_msts() -> set[str]:
+    """Return every MST retained by a non-empty history cache entry."""
+
+    history_dir = cache.CACHE_DIR / "history"
+    if not history_dir.exists():
+        return set()
+
+    msts: set[str] = set()
+    for path in history_dir.glob("*.json"):
+        entries = json.loads(path.read_text(encoding="utf-8"))
+        for entry in entries:
+            mst = entry.get("법령일련번호")
+            if mst:
+                msts.add(str(mst))
+    return msts
+
+
 def _load_history_name_file(path: Path) -> list[str]:
     """Load explicit law-name seeds from a newline-delimited text file."""
 
@@ -173,6 +190,73 @@ def _load_history_name_file(path: Path) -> list[str]:
             continue
         names.append(name)
     return names
+
+
+def _recover_repo_history_msts(
+    repo_dir: Path,
+    *,
+    refresh: bool,
+    workers: int,
+) -> set[str]:
+    """Recover cached histories for MSTs already preserved in a law repo."""
+
+    git_records = audit_history_vs_git._git_commit_records(repo_dir)
+    repo_msts = set(git_records)
+    missing_msts = repo_msts - _load_all_cached_history_msts()
+    if not missing_msts:
+        logger.info(f"Repo history recovery: missing_msts=0 repo_msts={len(repo_msts)}")
+        return repo_msts
+
+    seen_names: set[str] = set()
+    names: list[str] = []
+    for mst in sorted(missing_msts):
+        name = git_records[mst].law_name
+        key = normalize_history_law_name(name)
+        if key and key not in seen_names:
+            seen_names.add(key)
+            names.append(name)
+
+    logger.warning(
+        "Repo history recovery: missing_msts=%s seed_names=%s repo_msts=%s",
+        len(missing_msts),
+        len(names),
+        len(repo_msts),
+    )
+
+    counter = Counter()
+    recovered_msts: list[str] = []
+    msts_lock = threading.Lock()
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [
+            pool.submit(
+                _fetch_history_task,
+                name,
+                counter,
+                recovered_msts,
+                msts_lock,
+                refresh,
+            )
+            for name in names
+        ]
+        for future in as_completed(futures):
+            future.result()
+
+    _, _, errors = counter.snapshot()
+    _exit_if_errors("law repo history recovery", errors)
+
+    remaining = repo_msts - _load_all_cached_history_msts()
+    if remaining:
+        sample = sorted(remaining)[:10]
+        raise SystemExit(
+            "law repo history recovery failed: "
+            f"remaining_msts={len(remaining)} sample={sample}"
+        )
+
+    logger.info(
+        "Repo history recovery done: recovered_msts=%s remaining_msts=0",
+        len(missing_msts),
+    )
+    return repo_msts
 
 
 def _history_names_from_laws(
@@ -234,6 +318,14 @@ def main():
             "Read additional law names from a newline-delimited file and use "
             "them as explicit lsHistory seeds. Blank lines and lines starting "
             "with '#' are ignored."
+        ),
+    )
+    parser.add_argument(
+        "--law-repo",
+        type=Path,
+        help=(
+            "Recover history entries for 법령MST commits in this repository that "
+            "are absent from the history cache."
         ),
     )
     parser.add_argument(
@@ -340,8 +432,19 @@ def main():
 
     _assert_no_empty_history_cache()
 
-    # Step 2: Fetch detail for each MST found in history
-    mst_list = sorted(set(all_msts))
+    repo_msts: set[str] = set()
+    if args.law_repo is not None:
+        repo_msts = _recover_repo_history_msts(
+            args.law_repo,
+            refresh=args.refresh_history,
+            workers=workers,
+        )
+        _assert_no_empty_history_cache()
+
+    # Step 2: Fetch detail for each MST found or retained in history. Repealed
+    # laws can disappear from the current lawSearch list, so their cached
+    # histories and the canonical law repo must remain part of the inventory.
+    mst_list = sorted(set(all_msts) | _load_all_cached_history_msts() | repo_msts)
     logger.info(f"Fetching detail for {len(mst_list)} historical MSTs (workers={workers})...")
 
     detail_counter = Counter()
