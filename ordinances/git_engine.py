@@ -1,5 +1,6 @@
 """Ordinance-specific shim for shared historical-date commits."""
 
+import subprocess
 from pathlib import Path
 
 from core.config import BOT_AUTHOR
@@ -42,3 +43,26 @@ def commit_ordinance_deletion(
         dedup_grep_key=key,
         allow_empty=file_path is None,
     )
+
+
+def committed_metadata(repo: Path) -> tuple[set[str], set[str]]:
+    if not (repo / ".git").exists():
+        return set(), set()
+    result = subprocess.run(
+        ["git", "log", "HEAD", "--format=%B"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return set(), set()
+    serial_prefix = "자치법규일련번호: "
+    identity_prefix = "자치법규ID: "
+    serials = set()
+    identities = set()
+    for line in result.stdout.splitlines():
+        if line.startswith(serial_prefix) and line[len(serial_prefix):].strip():
+            serials.add(line[len(serial_prefix):].strip())
+        elif line.startswith(identity_prefix) and line[len(identity_prefix):].strip():
+            identities.add(line[len(identity_prefix):].strip())
+    return serials, identities

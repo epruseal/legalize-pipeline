@@ -89,6 +89,7 @@ def test_run_imports_only_uncommitted_serials_for_existing_identity(tmp_path, mo
 
 
 def test_committed_metadata_reads_git_history_once(tmp_path, monkeypatch):
+    from ordinances import git_engine
     (tmp_path / ".git").mkdir()
     calls = []
 
@@ -97,7 +98,7 @@ def test_committed_metadata_reads_git_history_once(tmp_path, monkeypatch):
         stdout = "자치법규ID: 1\n자치법규일련번호: 10\n자치법규ID: 2\n자치법규일련번호: 20\n"
 
     monkeypatch.setattr(
-        update.subprocess,
+        git_engine.subprocess,
         "run",
         lambda *args, **kwargs: calls.append((args, kwargs)) or Result(),
     )
@@ -253,3 +254,39 @@ def test_cli_rejects_fetch_failure_before_publish(tmp_path, monkeypatch):
     with pytest.raises(SystemExit, match="fetch_errors=1"):
         update.main()
     assert not list(repo.rglob("본문.md"))
+
+
+def test_retry_of_older_revision_does_not_overwrite_newer_revision(tmp_path, monkeypatch):
+    import sys
+    import pytest
+    from ordinances import cache
+    from ordinances.import_ordinances import import_from_cache
+    from tests.test_ordinances.test_converter import SAMPLE_XML
+
+    repo = _prepare_update(tmp_path, monkeypatch)
+    newer = SAMPLE_XML.replace("12345", "12346").replace("20210930", "20261011")
+    cache.put_detail("12346", newer.encode(), historical=True)
+    assert import_from_cache(repo, commit=True, serials=["12346"])["committed"] == 1
+    current = next(repo.rglob("본문.md"))
+    before = current.read_bytes()
+    monkeypatch.setattr(sys, "argv", ["ordinances.update", "--repo", str(repo), "--commit"])
+    with pytest.raises(SystemExit, match="errors=1"):
+        update.main()
+    assert current.read_bytes() == before
+
+
+def test_reimport_of_committed_old_revision_leaves_latest_tree_unchanged(tmp_path, monkeypatch):
+    from ordinances import cache
+    from ordinances.import_ordinances import import_from_cache
+    from tests.test_ordinances.test_converter import SAMPLE_XML
+
+    repo = _prepare_update(tmp_path, monkeypatch)
+    newer = SAMPLE_XML.replace("12345", "12346").replace("20210930", "20261011")
+    cache.put_detail("12346", newer.encode(), historical=True)
+    assert import_from_cache(repo, commit=True, serials=["12345", "12346"])["committed"] == 2
+    current = next(repo.rglob("본문.md"))
+    before = current.read_bytes()
+    stats = import_from_cache(repo, commit=True, serials=["12345"])
+    assert stats["written"] == stats["committed"] == 0
+    assert stats["skipped"] == 1
+    assert current.read_bytes() == before

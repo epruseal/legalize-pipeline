@@ -11,7 +11,7 @@ from core.atomic_io import atomic_write_text
 from . import cache
 from .config import ORDINANCE_REPO
 from .converter import UnsupportedOrdinanceType, format_date, parse_ordinance_xml, reset_path_registry, xml_to_markdown
-from .git_engine import commit_ordinance, commit_ordinance_deletion
+from .git_engine import commit_ordinance, commit_ordinance_deletion, committed_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -154,11 +154,23 @@ def import_from_cache(
     if not entries:
         return counters
 
+    committed_serials = committed_metadata(repo_dir)[0] if commit and not skip_dedup else set()
     latest_paths: dict[str, str] = _current_paths_by_identity(repo_dir) if commit else {}
     for entry in sorted(entries, key=_sort_key):
         try:
+            if entry["serial"] in committed_serials:
+                counters["skipped"] += 1
+                continue
             meta = entry["metadata"]
             rel_path = entry["rel_path"]
+            previous_path = latest_paths.get(entry["identity"])
+            if commit and previous_path:
+                current = _frontmatter_from_markdown(repo_dir / previous_path)
+                if _sort_key({"metadata": current, "rel_path": previous_path}) > _sort_key(entry):
+                    raise ValueError(
+                        f"Older revision {entry['serial']} would replace a newer ordinance; "
+                        "rebuild its history in an isolated repository before publication"
+                    )
             if entry["repeal"]:
                 previous_path = latest_paths.pop(entry["identity"], None)
                 deleted_path = previous_path if previous_path and _remove_stale_path(repo_dir, previous_path) else None

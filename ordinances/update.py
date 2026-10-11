@@ -2,7 +2,6 @@
 
 import argparse
 import logging
-import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -12,6 +11,7 @@ from . import cache
 from .config import CONCURRENT_WORKERS, ORDINANCE_REPO
 from .fetch_cache import fetch_all_current, fetch_details, fetch_history_for_entries
 from .import_ordinances import import_from_cache
+from .git_engine import committed_metadata as _committed_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -31,29 +31,6 @@ def _current_serials(entries: list[dict], limit: int | None = None) -> list[str]
             seen.add(serial)
             serials.append(serial)
     return serials[:limit] if limit is not None else serials
-
-
-def _committed_metadata(repo: Path) -> tuple[set[str], set[str]]:
-    if not (repo / ".git").exists():
-        return set(), set()
-    result = subprocess.run(
-        ["git", "log", "HEAD", "--format=%B"],
-        cwd=repo,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        return set(), set()
-    serial_prefix = "자치법규일련번호: "
-    identity_prefix = "자치법규ID: "
-    serials = set()
-    identities = set()
-    for line in result.stdout.splitlines():
-        if line.startswith(serial_prefix) and line[len(serial_prefix):].strip():
-            serials.add(line[len(serial_prefix):].strip())
-        elif line.startswith(identity_prefix) and line[len(identity_prefix):].strip():
-            identities.add(line[len(identity_prefix):].strip())
-    return serials, identities
 
 
 def _compact_date(value: str) -> str:
