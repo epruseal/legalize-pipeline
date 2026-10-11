@@ -237,22 +237,18 @@ def _fetch_detail_task(
 
 def fetch_details(entries: list[dict], workers: int = CONCURRENT_WORKERS, limit: int | None = None) -> Counter:
     ids = []
-    counter = Counter()
-    no_result_serials = cache.load_no_result_serials()
     seen = set()
     for entry in entries:
         ordinance_id = str(entry.get("자치법규ID", ""))
         ordinance_mst = str(entry.get("자치법규일련번호", ""))
         cache_key = ordinance_mst or ordinance_id
-        if ordinance_mst in no_result_serials and cache.get_detail(ordinance_mst, historical=True) is None:
-            counter.inc("no_result")
-            continue
         if ordinance_id and cache_key and cache_key not in seen:
             seen.add(cache_key)
             ids.append((ordinance_id, ordinance_mst))
     if limit is not None:
         ids = ids[:limit]
 
+    counter = Counter()
     quota = _QuotaBatch()
     completed = 0
     pool = ThreadPoolExecutor(max_workers=workers)
@@ -291,7 +287,7 @@ def fetch_details(entries: list[dict], workers: int = CONCURRENT_WORKERS, limit:
     return counter
 
 
-def missing_detail_entries(entries: list[dict]) -> list[dict]:
+def missing_detail_entries(entries: list[dict], *, retry_no_results: bool = False) -> list[dict]:
     missing = []
     no_result_serials = cache.load_no_result_serials()
     for entry in entries:
@@ -300,7 +296,7 @@ def missing_detail_entries(entries: list[dict]) -> list[dict]:
         cache_key = ordinance_mst or ordinance_id
         if ordinance_mst and detail_failure_allowlist.is_listed(ordinance_mst):
             continue
-        if ordinance_mst in no_result_serials:
+        if ordinance_mst in no_result_serials and not retry_no_results:
             continue
         if cache_key and cache.get_detail(cache_key, historical=bool(ordinance_mst)) is None:
             missing.append(entry)
@@ -351,7 +347,7 @@ def main() -> None:
         logger.info("ordinance history seed done: %s", seed_stats)
         if seed_stats["errors"]:
             raise SystemExit(f"ordinance history seed failed: errors={seed_stats['errors']}")
-    fetch_entries = missing_detail_entries(entries)
+    fetch_entries = missing_detail_entries(entries, retry_no_results=not args.history)
     missing_total = len(fetch_entries)
     if args.max_new_details is not None:
         fetch_entries = fetch_entries[:args.max_new_details]

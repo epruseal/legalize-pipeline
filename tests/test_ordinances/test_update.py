@@ -176,13 +176,13 @@ def test_cli_rejects_uncommitted_selected_revision(tmp_path, monkeypatch):
         update.main()
 
 
-def test_update_allows_recorded_permanent_source_absence(tmp_path, monkeypatch):
+def test_update_allows_confirmed_source_absence(tmp_path, monkeypatch):
     from ordinances import cache, fetch_cache
 
-    def unexpected_request(*args, **kwargs):
-        raise AssertionError("permanently absent revisions must not make a network request")
+    def confirmed_absence(*args, **kwargs):
+        raise fetch_cache.NoResultError("no ordinance detail")
 
-    monkeypatch.setattr(fetch_cache, "get_ordinance_detail", unexpected_request)
+    monkeypatch.setattr(fetch_cache, "get_ordinance_detail", confirmed_absence)
 
     repo = _prepare_update(tmp_path, monkeypatch)
     cache.detail_path("12345", historical=True).unlink()
@@ -311,3 +311,27 @@ def test_incremental_import_preserves_existing_identity_at_colliding_path(tmp_pa
     assert import_from_cache(repo, commit=True, serials=["12346"])["committed"] == 1
     assert original.read_bytes() == before
     assert len(list(repo.rglob("본문.md"))) == 2
+
+
+def test_update_recovers_revision_from_negative_cache(tmp_path, monkeypatch):
+    from ordinances import cache, fetch_cache
+    from tests.test_ordinances.test_converter import SAMPLE_XML
+
+    repo = _prepare_update(tmp_path, monkeypatch)
+    cache.detail_path("12345", historical=True).unlink()
+    cache.add_no_result_serial("12345")
+    requests = []
+
+    def recovered_detail(ordinance_id, *, mst, on_request_attempt):
+        requests.append(mst)
+        on_request_attempt()
+        raw = SAMPLE_XML.encode()
+        cache.put_detail(mst, raw, historical=True)
+        return raw
+
+    monkeypatch.setattr(fetch_cache, "get_ordinance_detail", recovered_detail)
+    stats = update.run(repo=repo, commit=True)
+    assert requests == ["12345"]
+    assert stats["fetched"] == stats["committed"] == 1
+    assert stats["errors"] == stats["fetch_errors"] == stats["missing"] == 0
+    assert "12345" in update._committed_metadata(repo)[0]

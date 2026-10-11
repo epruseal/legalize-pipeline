@@ -249,7 +249,6 @@ def test_fetch_details_accepts_allowlisted_http_error(monkeypatch):
 
 
 def test_fetch_details_records_history_no_result_xml(monkeypatch):
-    monkeypatch.setattr(fetch_cache.cache, "load_no_result_serials", set)
     no_results = []
 
     def raise_no_result(ordinance_id, mst="", on_request_attempt=None):
@@ -301,6 +300,8 @@ def test_missing_detail_entries_skips_negative_cache(monkeypatch):
 
     assert fetch_cache.missing_detail_entries(entries) == [entries[1]]
 
+    assert fetch_cache.missing_detail_entries(entries, retry_no_results=True) == entries
+
 
 def test_main_exits_when_detail_fetch_has_errors(monkeypatch):
     counter = Counter()
@@ -332,7 +333,7 @@ def test_main_recovers_failed_details_after_batch(monkeypatch):
         "fetch_all_current",
         lambda types, org="", sborg="", display=100, max_entries=None, history=False, list_workers=1: [entry],
     )
-    monkeypatch.setattr(fetch_cache, "missing_detail_entries", lambda entries: list(entries))
+    monkeypatch.setattr(fetch_cache, "missing_detail_entries", lambda entries, **kwargs: list(entries))
 
     def fake_fetch_details(entries, workers, limit):
         fetch_calls.append(list(entries))
@@ -357,7 +358,7 @@ def test_main_exits_when_recovery_pass_still_has_errors(monkeypatch):
         "fetch_all_current",
         lambda types, org="", sborg="", display=100, max_entries=None, history=False, list_workers=1: [entry],
     )
-    monkeypatch.setattr(fetch_cache, "missing_detail_entries", lambda entries: list(entries))
+    monkeypatch.setattr(fetch_cache, "missing_detail_entries", lambda entries, **kwargs: list(entries))
 
     def fake_fetch_details(entries, workers, limit):
         fetch_calls.append(list(entries))

@@ -113,7 +113,7 @@ def _no_result_serials_path() -> Path:
 
 
 def load_no_result_serials() -> set[str]:
-    """Load history serials that the detail API permanently returns as 404."""
+    """Load serials that previously returned 404 or explicit no-result XML."""
     path = _no_result_serials_path()
     if not path.exists():
         return set()
@@ -121,7 +121,7 @@ def load_no_result_serials() -> set[str]:
 
 
 def add_no_result_serial(serial: str) -> None:
-    """Append a permanently missing history serial to the negative cache."""
+    """Append a missing history serial to the negative cache."""
     path = _no_result_serials_path()
     with _no_result_lock:
         path.parent.mkdir(parents=True, exist_ok=True)
