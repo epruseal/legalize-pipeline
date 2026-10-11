@@ -177,13 +177,18 @@ def test_cli_rejects_uncommitted_selected_revision(tmp_path, monkeypatch):
 
 
 def test_update_allows_recorded_permanent_source_absence(tmp_path, monkeypatch):
-    from ordinances import cache
+    from ordinances import cache, fetch_cache
+
+    def unexpected_request(*args, **kwargs):
+        raise AssertionError("permanently absent revisions must not make a network request")
+
+    monkeypatch.setattr(fetch_cache, "get_ordinance_detail", unexpected_request)
 
     repo = _prepare_update(tmp_path, monkeypatch)
     cache.detail_path("12345", historical=True).unlink()
     cache.add_no_result_serial("12345")
     stats = update.run(repo=repo, commit=True)
-    assert stats["errors"] == 0
+    assert stats["fetch_errors"] == stats["errors"] == 0
     assert stats["missing"] == 0
 
 

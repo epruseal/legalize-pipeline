@@ -237,18 +237,22 @@ def _fetch_detail_task(
 
 def fetch_details(entries: list[dict], workers: int = CONCURRENT_WORKERS, limit: int | None = None) -> Counter:
     ids = []
+    counter = Counter()
+    no_result_serials = cache.load_no_result_serials()
     seen = set()
     for entry in entries:
         ordinance_id = str(entry.get("자치법규ID", ""))
         ordinance_mst = str(entry.get("자치법규일련번호", ""))
         cache_key = ordinance_mst or ordinance_id
+        if ordinance_mst in no_result_serials and cache.get_detail(ordinance_mst, historical=True) is None:
+            counter.inc("no_result")
+            continue
         if ordinance_id and cache_key and cache_key not in seen:
             seen.add(cache_key)
             ids.append((ordinance_id, ordinance_mst))
     if limit is not None:
         ids = ids[:limit]
 
-    counter = Counter()
     quota = _QuotaBatch()
     completed = 0
     pool = ThreadPoolExecutor(max_workers=workers)

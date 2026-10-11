@@ -249,6 +249,7 @@ def test_fetch_details_accepts_allowlisted_http_error(monkeypatch):
 
 
 def test_fetch_details_records_history_no_result_xml(monkeypatch):
+    monkeypatch.setattr(fetch_cache.cache, "load_no_result_serials", set)
     no_results = []
 
     def raise_no_result(ordinance_id, mst="", on_request_attempt=None):
