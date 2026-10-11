@@ -258,14 +258,21 @@ def parse_ordinance_xml(raw_xml: bytes | str) -> dict:
         "담당부서": normalize_text(_text(root, ".//담당부서명")),
     }
     articles = []
+    seen_articles = set()
     for jo in (node for node in root.iter() if node.tag in {"조문단위", "조"}):
         number, branch_number = _split_article_number(
             jo.findtext("조문번호", ""), jo.findtext("조문가지번호", "")
         )
+        kind = _normalize_article_kind(jo.findtext("조문여부", ""))
+        key = (number, branch_number)
+        if kind != "전문" and number not in {"", "0"}:
+            if key in seen_articles:
+                raise ValueError(f"duplicate ordinance article {number} {branch_number}")
+            seen_articles.add(key)
         articles.append({
             "조문번호": number,
             "조문가지번호": branch_number,
-            "조문여부": _normalize_article_kind(jo.findtext("조문여부", "")),
+            "조문여부": kind,
             "조문제목": jo.findtext("조문제목", "") or jo.findtext("조제목", ""),
             "조문내용": jo.findtext("조문내용", "") or jo.findtext("조내용", ""),
             "항": [],

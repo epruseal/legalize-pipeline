@@ -335,3 +335,19 @@ def test_update_recovers_revision_from_negative_cache(tmp_path, monkeypatch):
     assert stats["fetched"] == stats["committed"] == 1
     assert stats["errors"] == stats["fetch_errors"] == stats["missing"] == 0
     assert "12345" in update._committed_metadata(repo)[0]
+
+
+def test_cli_rejects_duplicate_article_numbers_before_writing(tmp_path, monkeypatch):
+    import sys
+    import pytest
+    from ordinances import cache
+    from tests.test_ordinances.test_converter import SAMPLE_XML
+
+    repo = _prepare_update(tmp_path, monkeypatch)
+    duplicate = '<조><조문번호>000100</조문번호><조문여부>Y</조문여부><조내용>제1조제1항의 담당자</조내용></조>'
+    cache.put_detail("12345", SAMPLE_XML.replace('</자치법규>', duplicate + '</자치법규>').encode(), historical=True)
+    monkeypatch.setattr(sys, "argv", ["ordinances.update", "--repo", str(repo), "--commit"])
+    with pytest.raises(SystemExit, match="errors=1"):
+        update.main()
+    assert not list(repo.rglob('본문.md'))
+    assert '12345' not in update._committed_metadata(repo)[0]
