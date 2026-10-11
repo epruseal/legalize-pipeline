@@ -181,8 +181,9 @@ def _split_jurisdiction_for_output(value: str) -> tuple[str, str]:
 _assigned_paths: dict[str, str] = {}
 
 
-def reset_path_registry() -> None:
+def reset_path_registry(existing_paths: dict[str, str] | None = None) -> None:
     _assigned_paths.clear()
+    _assigned_paths.update(existing_paths or {})
 
 
 def build_source_url(ordinance_id: str, name: str) -> str:

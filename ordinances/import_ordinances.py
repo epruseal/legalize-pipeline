@@ -137,6 +137,8 @@ def import_from_cache(
             logger.exception("Failed parsing ordinance cache_key=%s", cache_key)
             counters["errors"] += 1
 
+    latest_paths = _current_paths_by_identity(repo_dir) if commit and candidates else {}
+    reset_path_registry({path: identity for identity, path in latest_paths.items()})
     entries = []
     for serial in sorted(candidates):
         candidate = candidates[serial]
@@ -155,7 +157,6 @@ def import_from_cache(
         return counters
 
     committed_serials = committed_metadata(repo_dir)[0] if commit and not skip_dedup else set()
-    latest_paths: dict[str, str] = _current_paths_by_identity(repo_dir) if commit else {}
     for entry in sorted(entries, key=_sort_key):
         try:
             if entry["serial"] in committed_serials:

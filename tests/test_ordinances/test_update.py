@@ -290,3 +290,19 @@ def test_reimport_of_committed_old_revision_leaves_latest_tree_unchanged(tmp_pat
     assert stats["written"] == stats["committed"] == 0
     assert stats["skipped"] == 1
     assert current.read_bytes() == before
+
+
+def test_incremental_import_preserves_existing_identity_at_colliding_path(tmp_path, monkeypatch):
+    from ordinances import cache
+    from ordinances.import_ordinances import import_from_cache
+    from tests.test_ordinances.test_converter import SAMPLE_XML
+
+    repo = _prepare_update(tmp_path, monkeypatch)
+    assert import_from_cache(repo, commit=True, serials=["12345"])["committed"] == 1
+    original = next(repo.rglob("본문.md"))
+    before = original.read_bytes()
+    other = SAMPLE_XML.replace("2000111", "2000112").replace("12345", "12346")
+    cache.put_detail("12346", other.encode(), historical=True)
+    assert import_from_cache(repo, commit=True, serials=["12346"])["committed"] == 1
+    assert original.read_bytes() == before
+    assert len(list(repo.rglob("본문.md"))) == 2
