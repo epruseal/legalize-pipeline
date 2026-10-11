@@ -91,7 +91,7 @@ def search_ordinances(
     if ordinance_type:
         params["knd"] = TYPE_CODES.get(ordinance_type, ordinance_type)
     if date_range:
-        params["prmlYd"] = date_range
+        params["ancYd"] = date_range
 
     for attempt in range(MAX_RETRIES + 1):
         resp = _request(f"{LAW_API_BASE}/lawSearch.do", params)

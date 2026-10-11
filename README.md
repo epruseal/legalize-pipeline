@@ -296,3 +296,8 @@ ORDINANCE_KR_REPO=/path/to/ordinance-kr
 현행 캐시 갱신은 목록의 남은 페이지 수와 캐시에 없는 상세 수를 나누어 요청 예산을 검사합니다.
 이미 캐시된 상세를 신규 요청으로 계산하지 않으며, 현행 목록도 지정한 워커 수로 수집합니다.
 Rust 컴파일러는 이 수집 예산에 관여하지 않으며 기존 캐시 입력 형식을 유지합니다.
+
+자치법규 목록의 공포일자 범위는 공식 API 인자 `ancYd`로 요청합니다.
+`prmlYd`는 자치법규 목록에서 무시되어 전체 목록을 반환하므로 사용하지 않습니다.
+반환된 항목의 공포일자도 다시 검사합니다. 이 변경은 캐시 XML과 Rust 변환 규약을 바꾸지 않습니다.
+명세: https://open.law.go.kr/LSO/openApi/guideResult.do?htmlName=ordinListGuide
