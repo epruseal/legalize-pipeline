@@ -212,7 +212,10 @@ def main() -> None:
     parser.add_argument("--commit", action="store_true")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    logger.info("ordinance import done: %s", import_from_cache(args.repo, limit=args.limit, commit=args.commit))
+    stats = import_from_cache(args.repo, limit=args.limit, commit=args.commit)
+    logger.info("ordinance import done: %s", stats)
+    if stats["errors"]:
+        raise SystemExit(f"Ordinance import failed: errors={stats['errors']}")
 
 
 if __name__ == "__main__":

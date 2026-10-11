@@ -274,3 +274,13 @@ ORDINANCE_KR_REPO=/path/to/ordinance-kr
 - 2개 MST는 메타데이터 누락 (GitHub Issues 참조)
 - `소관부처` 필드는 항상 YAML 리스트 형식
 - **판례 긴 파일명 capping**: 형사 병합/분리 판결은 `사건번호` 한 필드에 수십~수백 개 사건번호를 쉼표로 나열하는 경우가 있어, 그대로 파일명으로 쓰면 macOS APFS의 `NAME_MAX=255 bytes` 제한을 초과해 `git checkout`이 실패한다. `precedents/converter.py`의 `cap_filename_bytes`가 파일명 stem을 UTF-8 기준 180바이트로 cap하고, 잘린 경우 `_{판례일련번호}`를 접미사로 붙여 고유성을 보존한다. `compiler-for-precedent`(Rust 재구현)도 동일한 로직을 갖는다.
+
+## 자치법규 업데이트 실패 처리
+
+`python -m ordinances.update --commit`은 현재 HEAD 이력으로 수집 중복을 판단합니다.
+보관 브랜치에만 있는 판본은 수집 대상에서 제외하지 않습니다.
+변환 오류가 있거나 선택한 판본이 HEAD 이력에 남지 않으면 명령은 실패합니다.
+원천의 영구 부재가 `_no_result_serials.txt`에 기록된 판본은 미반영 검사에서 제외합니다.
+일일 워크플로는 이 명령이 실패하면 게시 단계로 진행하지 않습니다.
+오류를 수정하고 다시 실행하면 이미 커밋한 판본은 건너뛰고 남은 판본을 처리합니다.
+`python -m ordinances.import_ordinances`도 변환 오류가 있으면 실패 종료합니다.

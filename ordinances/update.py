@@ -8,6 +8,7 @@ from pathlib import Path
 
 from core.github_actions import report_partial_fetch
 
+from . import cache
 from .config import CONCURRENT_WORKERS, ORDINANCE_REPO
 from .fetch_cache import fetch_all_current, fetch_details, fetch_history_for_entries
 from .import_ordinances import import_from_cache
@@ -36,7 +37,7 @@ def _committed_metadata(repo: Path) -> tuple[set[str], set[str]]:
     if not (repo / ".git").exists():
         return set(), set()
     result = subprocess.run(
-        ["git", "log", "--all", "--format=%B"],
+        ["git", "log", "HEAD", "--format=%B"],
         cwd=repo,
         capture_output=True,
         text=True,
@@ -124,6 +125,12 @@ def run(
         "fetch_errors": fetch_errors,
         **import_stats,
     }
+    if commit:
+        committed_serials, _ = _committed_metadata(repo)
+        missing = import_serial_set - committed_serials - cache.load_no_result_serials()
+        stats["missing"] = len(missing)
+        if missing:
+            logger.error("Selected ordinance revisions are missing from HEAD: %s", ", ".join(sorted(missing)))
     logger.info("ordinance update done: %s", stats)
     return stats
 
@@ -151,6 +158,8 @@ def main() -> None:
         days=args.days,
     )
     report_partial_fetch("Ordinances", stats)
+    if stats["errors"] or stats["fetch_errors"] or stats.get("missing", 0):
+        raise SystemExit(f"Ordinance update failed: errors={stats['errors']}, missing={stats.get('missing', 0)}, fetch_errors={stats['fetch_errors']}")
 
 
 if __name__ == "__main__":

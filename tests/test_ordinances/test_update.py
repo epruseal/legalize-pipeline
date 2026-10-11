@@ -44,6 +44,7 @@ def test_run_fetches_then_imports(tmp_path, monkeypatch):
         "committed": 5,
         "skipped": 6,
         "errors": 7,
+        "missing": 2,
     }
     assert calls[0] == ("fetch", ["조례"], {"org": "11", "sborg": "110", "max_entries": 10, "date_range": "20260101~20260115"})
     assert calls[2][0] == "details"
@@ -106,3 +107,149 @@ def test_committed_metadata_reads_git_history_once(tmp_path, monkeypatch):
     assert serials == {"10", "20"}
     assert identities == {"1", "2"}
     assert len(calls) == 1
+
+
+def _prepare_update(tmp_path, monkeypatch):
+    import subprocess
+    from ordinances import cache
+    from tests.test_ordinances.test_converter import SAMPLE_XML
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-b", "main", str(repo)], check=True, capture_output=True)
+    for key, value in [("user.name", "Test"), ("user.email", "test@example.invalid")]:
+        subprocess.run(["git", "-C", str(repo), "config", key, value], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "--allow-empty", "-m", "initial"], check=True, capture_output=True)
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path / "cache")
+    monkeypatch.setattr(cache, "HISTORY_DIR", tmp_path / "cache/history")
+    cache.put_detail("12345", SAMPLE_XML.encode(), historical=True)
+    entry = {"자치법규ID": "2000111", "자치법규일련번호": "12345", "공포일자": "20261011"}
+    monkeypatch.setattr(update, "fetch_all_current", lambda *args, **kwargs: [entry])
+    monkeypatch.setattr(update, "fetch_history_for_entries", lambda *args, **kwargs: [entry])
+    monkeypatch.setattr(update, "_date_range", lambda days: "20261001~20261011")
+    return repo
+
+
+def test_update_imports_revision_present_only_on_archive_branch(tmp_path, monkeypatch):
+    import subprocess
+    from ordinances.import_ordinances import import_from_cache
+
+    repo = _prepare_update(tmp_path, monkeypatch)
+    subprocess.run(["git", "-C", str(repo), "switch", "-c", "archive"], check=True)
+    assert import_from_cache(repo, commit=True, serials=["12345"])["committed"] == 1
+    subprocess.run(["git", "-C", str(repo), "switch", "main"], check=True)
+    stats = update.run(repo=repo, commit=True)
+    assert stats["committed"] == 1
+    assert len(list(repo.rglob("본문.md"))) == 1
+    assert "12345" in update._committed_metadata(repo)[0]
+    assert update.run(repo=repo, commit=True)["committed"] == 0
+
+
+def test_cli_rejects_parse_error_and_recovers_on_next_run(tmp_path, monkeypatch):
+    import sys
+    import pytest
+    from ordinances import cache
+    from tests.test_ordinances.test_converter import SAMPLE_XML
+
+    repo = _prepare_update(tmp_path, monkeypatch)
+    cache.put_detail("12345", b"<broken", historical=True)
+    monkeypatch.setattr(sys, "argv", ["ordinances.update", "--repo", str(repo), "--commit"])
+    with pytest.raises(SystemExit, match="errors=1"):
+        update.main()
+    assert not list(repo.rglob("본문.md"))
+    cache.put_detail("12345", SAMPLE_XML.encode(), historical=True)
+    update.main()
+    assert len(list(repo.rglob("본문.md"))) == 1
+    assert update.run(repo=repo, commit=True)["committed"] == 0
+
+
+def test_cli_rejects_uncommitted_selected_revision(tmp_path, monkeypatch):
+    import sys
+    import pytest
+    from ordinances import import_ordinances
+
+    repo = _prepare_update(tmp_path, monkeypatch)
+    monkeypatch.setattr(import_ordinances, "commit_ordinance", lambda *args, **kwargs: False)
+    monkeypatch.setattr(sys, "argv", ["ordinances.update", "--repo", str(repo), "--commit"])
+    with pytest.raises(SystemExit, match="missing=1"):
+        update.main()
+
+
+def test_update_allows_recorded_permanent_source_absence(tmp_path, monkeypatch):
+    from ordinances import cache
+
+    repo = _prepare_update(tmp_path, monkeypatch)
+    cache.detail_path("12345", historical=True).unlink()
+    cache.add_no_result_serial("12345")
+    stats = update.run(repo=repo, commit=True)
+    assert stats["errors"] == 0
+    assert stats["missing"] == 0
+
+
+def test_partial_import_recovers_without_reimporting_successful_revisions(tmp_path, monkeypatch):
+    import sys
+    import pytest
+    from ordinances import cache
+    from tests.test_ordinances.test_converter import SAMPLE_XML
+
+    repo = _prepare_update(tmp_path, monkeypatch)
+    entries = [
+        {"자치법규ID": "2000111", "자치법규일련번호": "12345", "공포일자": "20261011"},
+        {"자치법규ID": "2000112", "자치법규일련번호": "12346", "공포일자": "20261011"},
+    ]
+    monkeypatch.setattr(update, "fetch_all_current", lambda *args, **kwargs: entries)
+    monkeypatch.setattr(update, "fetch_history_for_entries", lambda *args, **kwargs: entries)
+    cache.put_detail("12346", b"<broken", historical=True)
+    monkeypatch.setattr(sys, "argv", ["ordinances.update", "--repo", str(repo), "--commit"])
+    with pytest.raises(SystemExit, match="errors=1, missing=1"):
+        update.main()
+    assert update._committed_metadata(repo)[0] == {"12345"}
+    fixed_xml = SAMPLE_XML.replace("2000111", "2000112").replace("12345", "12346")
+    cache.put_detail("12346", fixed_xml.encode(), historical=True)
+    stats = update.run(repo=repo, commit=True)
+    assert stats["committed"] == 1
+    assert stats["missing"] == stats["errors"] == 0
+    assert update._committed_metadata(repo)[0] == {"12345", "12346"}
+    assert update.run(repo=repo, commit=True)["committed"] == 0
+
+
+def test_import_cli_fails_on_malformed_cache(tmp_path, monkeypatch):
+    import sys
+    import pytest
+    from ordinances import cache, import_ordinances
+
+    repo = _prepare_update(tmp_path, monkeypatch)
+    cache.put_detail("12345", b"<broken", historical=True)
+    monkeypatch.setattr(sys, "argv", ["ordinances.import_ordinances", "--repo", str(repo), "--commit"])
+    with pytest.raises(SystemExit, match="errors=1"):
+        import_ordinances.main()
+
+
+def test_coverage_accepts_repeal_commit_without_current_document(tmp_path, monkeypatch):
+    from ordinances import cache
+    from tests.test_ordinances.test_converter import SAMPLE_XML
+
+    repo = _prepare_update(tmp_path, monkeypatch)
+    cache.put_detail("12345", SAMPLE_XML.replace("일부개정", "폐지").encode(), historical=True)
+    stats = update.run(repo=repo, commit=True)
+    assert stats["committed"] == 1
+    assert stats["missing"] == stats["errors"] == 0
+    assert not list(repo.rglob("본문.md"))
+    assert update._committed_metadata(repo)[0] == {"12345"}
+
+
+def test_cli_rejects_fetch_failure_before_publish(tmp_path, monkeypatch):
+    import sys
+    import pytest
+    from core.counter import Counter
+    from ordinances import cache
+
+    repo = _prepare_update(tmp_path, monkeypatch)
+    cache.detail_path("12345", historical=True).unlink()
+    counter = Counter()
+    counter.inc("errors")
+    monkeypatch.setattr(update, "fetch_details", lambda *args, **kwargs: counter)
+    monkeypatch.setattr(sys, "argv", ["ordinances.update", "--repo", str(repo)])
+    with pytest.raises(SystemExit, match="fetch_errors=1"):
+        update.main()
+    assert not list(repo.rglob("본문.md"))
