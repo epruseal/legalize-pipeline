@@ -52,11 +52,22 @@ Old caches without the snapshot retain the legacy final-state behavior. Refresh 
 Limited compiler probes do not apply the full snapshot.
 Full Python imports validate the snapshot and its selected details before they write files.
 Both implementations require a canonical `YYYY-MM-DD` observation date.
+New snapshots include `required_body_ids`, the selected IDs whose text or original document attachments must remain available.
+The pipeline retains this requirement while an ID remains selected.
+Python import and Rust compilation stop before output if these IDs provide neither text nor original document attachments.
+The publication validator also rejects `parsing-failed` for these IDs.
+Old snapshots without this field remain readable. Regenerate them with the pipeline before recovery.
+Rules without source text or original document attachments from the start can retain their existing notice.
 
 Daily updates collect this selection beyond the 14-day publication window.
 They refresh a selected cached detail if its `현행여부` remains `N`.
 If a selected ID differs from its cached detail, the pipeline refreshes that detail.
 If the refreshed ID still differs, the pipeline stops before it saves the selection.
+Before publication, daily updates compare each selected cached document with the published document.
+If the text differs or the document is missing, they fetch the selected detail again, including cached `Y` records.
+A failed fetch or identity mismatch stops the update before publication.
+A lost body stops the update if the published document previously contained text or original document attachments.
+The update reports these extra detail requests as `snapshot_refetched`.
 They reconcile selected revisions even when their serials already occur in Git history.
 Partial updates do not replace or apply the global selection.
 Import deduplication reads the current branch history. An archive branch does not suppress a missing revision in `main`.
@@ -70,3 +81,8 @@ python -m admrules.validate ../admrule-kr --snapshot ../.cache/admrule/current_s
 The validator reports missing IDs, extra IDs, duplicate IDs, and incorrect revision serials.
 New source types remain in the fetch results and produce warnings.
 Add a new legitimate type to `VALID_ADMRULE_TYPES` before it passes the file validator.
+
+If inline text is absent, the converter preserves original `첨부파일명` and `첨부파일링크` pairs.
+It records these files as `원문첨부` and uses `본문출처: attachment-only`.
+The Markdown body links to these documents. A `별표` alone does not replace the original body.
+Both implementations accept original document attachments for `required_body_ids`.

@@ -78,6 +78,8 @@ def test_future_revision_stays_in_history_and_current_body_is_restored(tmp_path,
     assert snapshot.reconcile_current_snapshot(repo, commit=True)["snapshot_committed"] == 0
 
     # Activation must work after the publication lookback and after deduplication.
+    from admrules import api_client
+    monkeypatch.setattr(api_client, "get_admrule_detail", lambda serial, **kwargs: cache.get_detail(serial))
     monkeypatch.setattr(update, "fetch_all_current", lambda **kwargs: [source_row("2")] if kwargs.get("history") is False else [])
     monkeypatch.setattr(fetch_cache, "get_admrule_detail", lambda serial, **kwargs: cache.get_detail(serial))
     result = update.run(repo=repo, commit=True)
@@ -296,3 +298,126 @@ def test_snapshot_path_swap_preserves_both_identities(tmp_path, monkeypatch):
     assert result == {"snapshot_written": 2, "snapshot_deleted": 2, "snapshot_committed": 4}
     assert validate_current_snapshot(repo, cache.CACHE_DIR / snapshot.SNAPSHOT_NAME) == []
     assert snapshot.reconcile_current_snapshot(repo, commit=True)["snapshot_committed"] == 0
+
+
+@pytest.mark.parametrize('stale_kind', ['name', 'body', 'empty'])
+def test_daily_rechecks_changed_cached_y_against_live_detail(tmp_path, monkeypatch, stale_kind):
+    from admrules import api_client
+    from types import SimpleNamespace
+    monkeypatch.setattr(cache, 'CACHE_DIR', tmp_path / 'cache')
+    fresh = detail('1')
+    cache.put_detail('1', fresh)
+    snapshot.write_current_snapshot([source_row('1')])
+    repo = tmp_path / 'repo'
+    init_repo(repo)
+    import_from_cache(repo, commit=True)
+    before = subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD'])
+    stale = fresh.replace('금융감독원 규정'.encode(), '오래된 규정'.encode()) if stale_kind == 'name' else fresh.replace('제1조 본문 1'.encode(), b'' if stale_kind == 'empty' else '오래된 본문'.encode())
+    cache.put_detail('1', stale)
+    monkeypatch.setattr(update, 'fetch_all_current', lambda **kw: [source_row('1')] if kw.get('history') is False else [])
+    calls = []
+    monkeypatch.setattr(api_client, '_request', lambda url, params: calls.append(params) or SimpleNamespace(content=fresh))
+    result = update.run(repo=repo, commit=True, workers=1)
+    assert len(calls) == 1
+    assert cache.get_detail('1') == fresh
+    assert result['snapshot_written'] == result['snapshot_deleted'] == result['snapshot_committed'] == 0
+    assert subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD']) == before
+
+
+@pytest.mark.parametrize('failure', ['empty', 'network', 'wrong_identity'])
+def test_daily_refetch_failure_preserves_published_tree_and_selection(tmp_path, monkeypatch, failure):
+    from admrules import api_client
+    from types import SimpleNamespace
+    monkeypatch.setattr(cache, 'CACHE_DIR', tmp_path / 'cache')
+    fresh = detail('1')
+    cache.put_detail('1', fresh)
+    snapshot.write_current_snapshot([source_row('1')])
+    repo = tmp_path / 'repo'
+    init_repo(repo)
+    import_from_cache(repo, commit=True)
+    before = subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD'])
+    files = {str(p): p.read_bytes() for p in repo.rglob('본문.md')}
+    selection = (cache.CACHE_DIR / snapshot.SNAPSHOT_NAME).read_bytes()
+    cache.put_detail('1', fresh.replace('제1조 본문 1'.encode(), b''))
+    monkeypatch.setattr(update, 'fetch_all_current', lambda **kw: [source_row('1')] if kw.get('history') is False else [])
+    def request(url, params):
+        if failure == 'network':
+            raise RuntimeError('network unavailable')
+        raw = fresh.replace('제1조 본문 1'.encode(), b'') if failure == 'empty' else fresh.replace('<행정규칙ID>123</행정규칙ID>'.encode(), b'')
+        return SimpleNamespace(content=raw)
+    monkeypatch.setattr(api_client, '_request', request)
+    with pytest.raises(RuntimeError):
+        update.run(repo=repo, commit=True, workers=1)
+    assert subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD']) == before
+    assert {str(p): p.read_bytes() for p in repo.rglob('본문.md')} == files
+    assert (cache.CACHE_DIR / snapshot.SNAPSHOT_NAME).read_bytes() == selection
+
+
+def test_live_same_serial_correction_is_applied_once(tmp_path, monkeypatch):
+    from admrules import api_client
+    from types import SimpleNamespace
+    monkeypatch.setattr(cache, 'CACHE_DIR', tmp_path / 'cache')
+    old = detail('1')
+    cache.put_detail('1', old)
+    snapshot.write_current_snapshot([source_row('1')])
+    repo = tmp_path / 'repo'
+    init_repo(repo)
+    import_from_cache(repo, commit=True)
+    fresh = detail('1', name='정정된 규정').replace('본문 1'.encode(), '정정 본문'.encode())
+    cache.put_detail('1', fresh)
+    monkeypatch.setattr(update, 'fetch_all_current', lambda **kw: [source_row('1')] if kw.get('history') is False else [])
+    calls = []
+    monkeypatch.setattr(api_client, '_request', lambda url, params: calls.append(params) or SimpleNamespace(content=fresh))
+    first = update.run(repo=repo, commit=True)
+    assert first['snapshot_written'] == first['snapshot_deleted'] == 1
+    assert first['snapshot_refetched'] == 1
+    assert '정정 본문' in next(repo.rglob('본문.md')).read_text()
+    second = update.run(repo=repo, commit=True)
+    assert second['snapshot_written'] == second['snapshot_deleted'] == second['snapshot_committed'] == 0
+    assert second['snapshot_refetched'] == 0 and len(calls) == 1
+
+
+def test_required_body_is_checked_before_any_snapshot_changes(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, 'CACHE_DIR', tmp_path / 'cache')
+    cache.put_detail('1', detail('1'))
+    snapshot.write_current_snapshot([source_row('1')])
+    repo = tmp_path / 'repo'
+    import_from_cache(repo)
+    before = {str(p): p.read_bytes() for p in repo.rglob('본문.md')}
+    cache.put_detail('1', detail('1', name='잘못된 새 경로').replace('제1조 본문 1'.encode(), b''))
+    with pytest.raises(RuntimeError, match='body regression'):
+        snapshot.reconcile_current_snapshot(repo)
+    assert {str(p): p.read_bytes() for p in repo.rglob('본문.md')} == before
+    # The publication validator also rejects a previously valid body lost later.
+    path = next(repo.rglob('본문.md'))
+    path.write_text(path.read_text().replace("본문출처: 'api-text'", "본문출처: 'parsing-failed'"))
+    assert any('body regression' in error for error in validate_current_snapshot(repo, cache.CACHE_DIR / snapshot.SNAPSHOT_NAME))
+
+
+def test_live_attachment_only_rule_preserves_original_file_links(tmp_path, monkeypatch):
+    from admrules import api_client, converter
+    from types import SimpleNamespace
+    monkeypatch.setattr(cache, 'CACHE_DIR', tmp_path / 'cache')
+    old = detail('1')
+    cache.put_detail('1', old)
+    snapshot.write_current_snapshot([source_row('1')])
+    repo = tmp_path / 'repo'
+    init_repo(repo)
+    import_from_cache(repo, commit=True)
+    fresh = old.replace('제1조 본문 1'.encode(), b'').replace(b'</AdmRulService>', '''<첨부파일>
+<첨부파일명>원문.pdf</첨부파일명><첨부파일링크>http://law.go.kr/flDownload.do?flSeq=1</첨부파일링크>
+<첨부파일명>원문.hwpx</첨부파일명><첨부파일링크>/LSW/flDownload.do?flSeq=2</첨부파일링크>
+</첨부파일></AdmRulService>'''.encode())
+    cache.put_detail('1', fresh)
+    monkeypatch.setattr(update, 'fetch_all_current', lambda **kw: [source_row('1')] if kw.get('history') is False else [])
+    monkeypatch.setattr(api_client, '_request', lambda url, params: SimpleNamespace(content=fresh))
+    result = update.run(repo=repo, workers=1, commit=True)
+    assert result['snapshot_written'] == 1 and result['snapshot_refetched'] == 1
+    path = next(repo.rglob('본문.md'))
+    text = path.read_text()
+    assert "본문출처: 'attachment-only'" in text and 'parsing-failed' not in text
+    assert '<http://law.go.kr/flDownload.do?flSeq=1>' in text
+    assert '<https://www.law.go.kr/LSW/flDownload.do?flSeq=2>' in text
+    assert converter.has_current_content(fresh)
+    assert validate_frontmatter(path) == []
+    assert validate_current_snapshot(repo, cache.CACHE_DIR / snapshot.SNAPSHOT_NAME) == []

@@ -134,3 +134,18 @@ and the Rust `admrule-kr-compiler`.
 - `수도권매립지관리공사의 설립 및 운영 등에 관한 법률` 제5조·제7조, `평생교육법` 제19조: 공공기관 위치 보정 근거.
 - `국가인권위원회법` 제3조 및 `고위공직자범죄수사처 설치 및 운영에 관한 법률` 제3조: 특정 상위기관에 편입하지 않는 독립기관 근거.
 - `10ㆍ29이태원참사 피해자 권리보장과 진상규명 및 재발방지를 위한 특별법` 제6조·제7조 및 `세월호 선체조사위원회의 설치 및 운영에 관한 특별법` 제3조·제4조·제9조: 특정 부처에 편입하지 않는 한시 조사위원회 근거.
+
+## Current body preservation
+
+`current_snapshot.json` can include `required_body_ids`, an array of selected rule IDs.
+Every listed ID must belong to `rules` and must retain source text or original document attachments.
+Python and Rust reject a missing body before a full import writes output.
+An absent field means an empty array for older snapshots.
+The field does not require text for rules that never supplied source text.
+The online pipeline rechecks changed cached documents against the live API before publication.
+The offline compiler enforces the recorded body requirement without making network requests.
+
+If inline text is absent, the converter preserves original `첨부파일명` and `첨부파일링크` pairs.
+It records these files as `원문첨부` and uses `본문출처: attachment-only`.
+The Markdown body links to these documents. A `별표` alone does not replace the original body.
+Both implementations accept original document attachments for `required_body_ids`.

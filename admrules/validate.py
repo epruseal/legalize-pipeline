@@ -128,6 +128,11 @@ def validate_frontmatter(file_path: Path) -> list[str]:
             if attachment.get(key) and not _is_law_go_kr_url(str(attachment[key])):
                 errors.append(f"첨부파일[{idx}].{key} must be a law.go.kr URL")
 
+    if fm.get("본문출처") == "attachment-only" and not any(
+            isinstance(attachment, dict) and attachment.get("별표구분") == "원문첨부"
+            and attachment.get("파일링크") for attachment in attachments):
+        errors.append("본문출처 attachment-only requires original file links")
+
     if fm.get("본문출처") == "api-text" and not body:
         errors.append("본문출처 api-text requires non-empty body")
 
@@ -148,6 +153,7 @@ def validate_current_snapshot(root: Path, snapshot_path: Path) -> list[str]:
         return ["Invalid current admrule snapshot"]
     actual = {}
     errors = []
+    required = set(snapshot.get("required_body_ids", []))
     for path in root.rglob("본문.md"):
         fm, _, parse_errors = _frontmatter_and_body(path.read_text(encoding="utf-8"))
         if parse_errors or not fm:
@@ -157,6 +163,8 @@ def validate_current_snapshot(root: Path, snapshot_path: Path) -> list[str]:
         if identity in actual:
             errors.append(f"Duplicate current rule identity: {identity}")
         actual[identity] = str(fm.get("행정규칙일련번호", ""))
+        if identity in required and fm.get("본문출처") == "parsing-failed":
+            errors.append(f"Current admrule body regression: {identity}")
     expected = snapshot["rules"]
     for label, identities in (
         ("Missing current rules", expected.keys() - actual.keys()),

@@ -75,7 +75,7 @@ def run(
     if full_run and fetch_errors:
         raise RuntimeError(f"Incomplete administrative rule update: {fetch_errors} detail failures")
     if full_run:
-        write_current_snapshot(current, history_entries=entries)
+        selection = write_current_snapshot(current, history_entries=entries, repo=repo, workers=workers)
     import_stats = import_from_cache(
         repo,
         limit=None,
@@ -85,6 +85,7 @@ def run(
     )
     if full_run and not import_stats.get("errors"):
         import_stats.update(reconcile_current_snapshot(repo, commit=commit))
+        import_stats["snapshot_refetched"] = selection["refreshed_details"]
     stats = {
         "cached": cached,
         "fetched": fetched,

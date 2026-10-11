@@ -463,6 +463,27 @@ def _attachment_nodes(root: ElementTree.Element) -> list[dict]:
     return attachments
 
 
+def _source_attachment_nodes(root: ElementTree.Element) -> list[dict]:
+    attachments = []
+    for node in root.findall(".//첨부파일"):
+        title = ""
+        for child in node:
+            if child.tag == "첨부파일명":
+                title = normalize_nfc((child.text or "").strip())
+            elif child.tag == "첨부파일링크":
+                link = _absolute_law_url(child.text or "")
+                if link:
+                    attachments.append({"별표번호": f"원문 {len(attachments) + 1}", "별표가지번호": "",
+                                        "별표구분": "원문첨부", "제목": title, "파일링크": link})
+                title = ""
+    return attachments
+
+
+def has_current_content(raw: bytes) -> bool:
+    root = ElementTree.fromstring(raw)
+    return bool(_plain_text(root) or _source_attachment_nodes(root))
+
+
 def build_frontmatter(metadata: dict, attachments: list[dict] | None = None) -> dict:
     issue_date, clamped = _clamp_issue_date(metadata.get("발령일자", ""))
     title = normalize_nfc(metadata.get("행정규칙명", ""))
@@ -593,8 +614,15 @@ def xml_to_markdown(raw_xml: bytes | str, attachment_metadata: list[dict] | None
     attachments = attachment_metadata if attachment_metadata is not None else _attachment_nodes(root)
     body = _plain_text(root)
     if not body:
-        metadata["body_source"] = "parsing-failed"
-        body = "본문은 국가법령정보센터 원문 또는 첨부파일을 참조하세요."
+        source_attachments = _source_attachment_nodes(root)
+        if source_attachments:
+            metadata["body_source"] = "attachment-only"
+            attachments = attachments + source_attachments
+            body = "본문은 다음 원문 첨부파일을 참조하세요.\n\n" + "\n\n".join(
+                f"<{attachment['파일링크']}>" for attachment in source_attachments)
+        else:
+            metadata["body_source"] = "parsing-failed"
+            body = "본문은 국가법령정보센터 원문 또는 첨부파일을 참조하세요."
 
     frontmatter = build_frontmatter(metadata, attachments)
     body = _render_structured_body(metadata.get("행정규칙명", ""), body)
