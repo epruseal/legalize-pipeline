@@ -71,6 +71,7 @@ def fetch_all_current(
     date_range: str = "",
     history: bool = False,
     list_workers: int = 1,
+    check_quota: bool = False,
 ) -> list[dict]:
     """Fetch ordinance list pages and filter selected types client-side.
 
@@ -118,6 +119,9 @@ def fetch_all_current(
     total_pages = math.ceil(total / display)
     if total_pages <= 1:
         return entries
+
+    if check_quota:
+        ensure_headroom(expected_requests=total_pages - 1, corpus="ordinances")
 
     if list_workers > 1 and max_entries is None:
         pages = range(2, total_pages + 1)
@@ -323,7 +327,7 @@ def main() -> None:
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     if not args.skip_quota_check:
-        ensure_headroom(expected_requests=10000 if args.history else args.limit or 200000, corpus="ordinances")
+        ensure_headroom(expected_requests=0 if args.history and args.skip_list else 1, corpus="ordinances")
     if args.history and args.skip_list:
         entries = cache.get_history_entries()
         if not entries:
@@ -337,7 +341,8 @@ def main() -> None:
             display=args.display,
             max_entries=args.limit,
             history=args.history,
-            list_workers=args.workers if args.history else 1,
+            list_workers=args.workers,
+            check_quota=not args.skip_quota_check,
         )
         if args.history and args.limit is None and not args.org and not args.sborg and not args.types:
             cache.put_history_entries(entries)
