@@ -351,3 +351,19 @@ def test_cli_rejects_duplicate_article_numbers_before_writing(tmp_path, monkeypa
         update.main()
     assert not list(repo.rglob('본문.md'))
     assert '12345' not in update._committed_metadata(repo)[0]
+
+
+def test_cli_rejects_repeated_article_heading_before_writing(tmp_path, monkeypatch):
+    import sys
+    import pytest
+    from ordinances import cache
+    from tests.test_ordinances.test_converter import SAMPLE_XML
+
+    repo = _prepare_update(tmp_path, monkeypatch)
+    malformed = SAMPLE_XML.replace("제1조(목적)", "제1조 제1조\n2(목적)")
+    cache.put_detail("12345", malformed.encode(), historical=True)
+    monkeypatch.setattr(sys, "argv", ["ordinances.update", "--repo", str(repo), "--commit"])
+    with pytest.raises(SystemExit, match="errors=1"):
+        update.main()
+    assert not list(repo.rglob("본문.md"))
+    assert "12345" not in update._committed_metadata(repo)[0]

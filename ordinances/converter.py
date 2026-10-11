@@ -264,6 +264,12 @@ def parse_ordinance_xml(raw_xml: bytes | str) -> dict:
             jo.findtext("조문번호", ""), jo.findtext("조문가지번호", "")
         )
         kind = _normalize_article_kind(jo.findtext("조문여부", ""))
+        content = jo.findtext("조문내용", "") or jo.findtext("조내용", "")
+        label = f"제{number}조" + (f"의{branch_number}" if branch_number else "")
+        if kind != "전문" and content.strip().startswith(label):
+            remainder = content.strip()[len(label):].lstrip()
+            if remainder.startswith(label):
+                raise ValueError(f"repeated ordinance article heading {label}")
         key = (number, branch_number)
         if kind != "전문" and number not in {"", "0"}:
             if key in seen_articles:
@@ -274,7 +280,7 @@ def parse_ordinance_xml(raw_xml: bytes | str) -> dict:
             "조문가지번호": branch_number,
             "조문여부": kind,
             "조문제목": jo.findtext("조문제목", "") or jo.findtext("조제목", ""),
-            "조문내용": jo.findtext("조문내용", "") or jo.findtext("조내용", ""),
+            "조문내용": content,
             "항": [],
         })
     return {
