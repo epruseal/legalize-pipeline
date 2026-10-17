@@ -1,0 +1,28 @@
+# These exact responses remain invalid. Daily updates retain the prior publication.
+# Every pending revision is fetched again, including outside the date window.
+# Changed invalid bytes, different errors, and expired reviews fail publication.
+entries:
+  - 자치법규일련번호: "2178401"
+    자치법규ID: "2023616"
+    자치법규명: "경기도 공공시설물의 우수 디자인 인증 조례"
+    공포일자: "20261012"
+    sha256: "c013ab12de1cf95dec606c35092312f04996543067c4d4bf861a6507a2f04649"
+    expected_error: "duplicate ordinance article 8"
+    checked_on: "2026-10-17"
+    expires_on: "2026-10-31"
+    reason: "Both the deleted and current Article 8 appear in the official source."
+    sources:
+      - "https://www.law.go.kr/LSW/ordinInfoR.do?ordinSeq=2178401&chrClsCd=010202&gubun=ELIS"
+      - "https://www.elis.go.kr/alrpop/alrDtlsPop?alrNo=41000016012061&histNo=005"
+  - 자치법규일련번호: "2178653"
+    자치법규ID: "2092891"
+    자치법규명: "연천군 지방공무원 여비 조례"
+    공포일자: "20261013"
+    sha256: "27b30cf736e86427cddc66fad5248c136e5ea780e47810e21d157f05640cd71a"
+    expected_error: "duplicate ordinance article 1"
+    checked_on: "2026-10-17"
+    expires_on: "2026-10-31"
+    reason: "Addendum articles are interleaved with the main articles in the API response."
+    sources:
+      - "https://www.law.go.kr/LSW/ordinInfoR.do?ordinSeq=2178653&chrClsCd=010202&gubun=ELIS"
+      - "https://www.elis.go.kr/alrpop/alrDtlsPop?alrNo=41800126258002&histNo=009"

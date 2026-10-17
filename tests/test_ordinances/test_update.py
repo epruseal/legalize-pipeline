@@ -1,6 +1,13 @@
 """Tests for ordinances/update.py."""
 
+import pytest
+
 from ordinances import update
+
+
+@pytest.fixture(autouse=True)
+def isolate_reviewed_source_defects(monkeypatch):
+    monkeypatch.setattr(update.deferred_revisions, "load_entries", lambda: {})
 
 
 def test_run_fetches_then_imports(tmp_path, monkeypatch):
@@ -40,6 +47,7 @@ def test_run_fetches_then_imports(tmp_path, monkeypatch):
         "cached": 1,
         "fetched": 2,
         "fetch_errors": 3,
+        "deferred": 0,
         "written": 4,
         "committed": 5,
         "skipped": 6,
@@ -190,6 +198,19 @@ def test_update_allows_confirmed_source_absence(tmp_path, monkeypatch):
     stats = update.run(repo=repo, commit=True)
     assert stats["fetch_errors"] == stats["errors"] == 0
     assert stats["missing"] == 0
+
+
+def test_previous_source_absence_does_not_hide_a_missing_restored_commit(tmp_path, monkeypatch):
+    import sys
+    from ordinances import cache, import_ordinances
+
+    repo = _prepare_update(tmp_path, monkeypatch)
+    cache.add_no_result_serial("12345")
+    monkeypatch.setattr(import_ordinances, "commit_ordinance", lambda *args, **kwargs: False)
+    monkeypatch.setattr(sys, "argv", ["ordinances.update", "--repo", str(repo), "--commit"])
+
+    with pytest.raises(SystemExit, match="missing=1"):
+        update.main()
 
 
 def test_partial_import_recovers_without_reimporting_successful_revisions(tmp_path, monkeypatch):

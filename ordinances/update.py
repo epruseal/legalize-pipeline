@@ -2,13 +2,15 @@
 
 import argparse
 import logging
+import os
 from datetime import datetime, timedelta
 from pathlib import Path
 
 from core.github_actions import report_partial_fetch
 
-from . import cache
+from . import cache, deferred_revisions
 from .config import CONCURRENT_WORKERS, ORDINANCE_REPO
+from .converter import parse_ordinance_xml
 from .fetch_cache import fetch_all_current, fetch_details, fetch_history_for_entries
 from .import_ordinances import import_from_cache
 from .git_engine import committed_metadata as _committed_metadata
@@ -63,6 +65,40 @@ def _import_serials(entries: list[dict], repo: Path, date_range: str, *, commit:
     return serials
 
 
+def _deferred_serials(serials: list[str]) -> set[str]:
+    deferred = set()
+    for serial in serials:
+        if serial not in deferred_revisions.load_entries():
+            continue
+        raw = cache.get_detail(serial, historical=True)
+        if not raw:
+            continue
+        try:
+            detail = parse_ordinance_xml(raw)
+        except ValueError as error:
+            entry = deferred_revisions.accepted_entry(serial, raw, error)
+            if entry is None:
+                continue
+            deferred.add(serial)
+            message = f"MST={serial}: {entry['reason']} Review expires {entry['expires_on']}. Revision not published."
+            logger.warning("Deferred ordinance revision %s", message)
+            print(f"::warning title=Deferred ordinance revision::{message}")
+            summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+            if summary_path:
+                with Path(summary_path).open("a", encoding="utf-8") as summary:
+                    summary.write(f"\nDeferred ordinance revision {message}\n")
+                    for url in entry["sources"]:
+                        summary.write(f"\nSource: {url}\n")
+        else:
+            entry = deferred_revisions.load_entries()[serial]
+            if any(str(detail["metadata"].get(key, "")) != entry[key]
+                   for key in ("자치법규ID", "자치법규일련번호")):
+                raise ValueError(f"Reviewed ordinance revision {serial} returned a different identity")
+            if not any(article["조문내용"].strip() for article in detail["articles"]):
+                raise ValueError(f"Reviewed ordinance revision {serial} lost its article text")
+    return deferred
+
+
 def run(
     *,
     repo: Path = ORDINANCE_REPO,
@@ -80,7 +116,15 @@ def run(
     entries = fetch_history_for_entries(current_entries, types) if current_entries else []
     if not entries:
         entries = current_entries
+    pending = []
+    if commit and limit is None and not (types or org or sborg):
+        committed_serials, _ = _committed_metadata(repo)
+        selected = set(_current_serials(entries))
+        pending = [entry for serial, entry in deferred_revisions.load_entries().items()
+                   if serial not in committed_serials]
+        entries = entries + [entry for entry in pending if entry["자치법규일련번호"] not in selected]
     import_serials = _import_serials(entries, repo, date_range, commit=commit)
+    import_serials.extend(serial for serial in _current_serials(pending) if serial not in import_serials)
     import_serial_set = set(import_serials)
     fetch_entries = [
         entry
@@ -89,22 +133,26 @@ def run(
     ]
     fetch_counter = fetch_details(fetch_entries, workers=workers)
     cached, fetched, fetch_errors = fetch_counter.snapshot()
+    deferred = _deferred_serials(import_serials) if commit else set()
     import_stats = import_from_cache(
         repo,
         limit=None,
         commit=commit,
-        serials=import_serials,
+        serials=[serial for serial in import_serials if serial not in deferred],
         skip_dedup=False,
     )
     stats = {
         "cached": cached,
         "fetched": fetched,
         "fetch_errors": fetch_errors,
+        "deferred": len(deferred),
         **import_stats,
     }
     if commit:
         committed_serials, _ = _committed_metadata(repo)
-        missing = import_serial_set - committed_serials - cache.load_no_result_serials()
+        unavailable = {serial for serial in import_serial_set & cache.load_no_result_serials()
+                       if cache.get_detail(serial, historical=True) is None}
+        missing = import_serial_set - committed_serials - unavailable - deferred
         stats["missing"] = len(missing)
         if missing:
             logger.error("Selected ordinance revisions are missing from HEAD: %s", ", ".join(sorted(missing)))

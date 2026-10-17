@@ -11,7 +11,7 @@ import requests
 from core.counter import Counter
 from core.quota_budget import ensure_headroom, record_requests
 
-from . import cache, checkpoint, detail_failure_allowlist
+from . import cache, checkpoint, deferred_revisions, detail_failure_allowlist
 from .api_client import NoResultError, get_ordinance_detail, search_ordinances
 from .config import API_TYPES, CONCURRENT_WORKERS
 from .failures import append_failure
@@ -195,13 +195,15 @@ def _fetch_detail_task(
     quota: _QuotaBatch,
 ) -> None:
     cache_key = str(ordinance_mst or ordinance_id)
-    if cache.get_detail(cache_key, historical=bool(ordinance_mst)) is not None:
+    refresh = ordinance_mst in deferred_revisions.load_entries()
+    if not refresh and cache.get_detail(cache_key, historical=bool(ordinance_mst)) is not None:
         counter.inc("cached")
         return
     try:
         get_ordinance_detail(
             ordinance_id,
             mst=ordinance_mst,
+            **({"refresh": True} if refresh else {}),
             on_request_attempt=quota.record_attempt,
         )
         checkpoint.mark_detail_processed(cache_key)
