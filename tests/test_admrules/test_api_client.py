@@ -129,3 +129,17 @@ def test_wrong_serial_response_does_not_overwrite_cached_revision(tmp_path, monk
         with pytest.raises(RuntimeError, match="detail serial mismatch"):
             api_client.get_admrule_detail("123", refresh=True)
         assert api_client.cache.get_detail("123") == previous
+
+
+def test_no_result_response_preserves_cached_revision(tmp_path, monkeypatch, fixtures_dir):
+    import pytest
+    monkeypatch.setattr(api_client.cache, "CACHE_DIR", tmp_path)
+    previous = b'<AdmRulService><ID>123</ID></AdmRulService>'
+    api_client.cache.put_detail("123", previous)
+    response = (fixtures_dir / "admrule_no_result.xml").read_bytes()
+    monkeypatch.setattr(api_client, "_request", lambda *args: Response(response))
+
+    with pytest.raises(api_client.NoResultError, match="123"):
+        api_client.get_admrule_detail("123", refresh=True)
+
+    assert api_client.cache.get_detail("123") == previous

@@ -41,6 +41,11 @@ A missing search row does not prove repeal.
 The pipeline rechecks absent candidates whose latest cached detail says `Y`.
 It retains a candidate if the live detail still says `Y` and records this discrepancy in `supplemental`.
 Daily updates recheck these retained rules even outside the publication window.
+If the current list omits a rule, the pipeline probes its live detail.
+An explicit no-result response adds `live_detail_no_result` to `excluded`.
+It preserves cached XML and publication history and retries the excluded detail on later runs.
+This exclusion does not establish legal repeal.
+A no-result response for a listed current rule still stops the update.
 API errors or unexpected response roots stop this recheck without replacing the selection.
 `conflicts` records selected rows whose cached detail still says `N`. The selection preserves these rows instead of silently dropping them.
 The selection follows the API classification. It does not infer legal validity from an effective date alone.

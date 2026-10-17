@@ -1,6 +1,7 @@
 """Current API selection, separate from publication-ordered revision history."""
 
 import json
+import logging
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
@@ -12,11 +13,12 @@ from . import cache
 from .converter import has_current_content, admrule_identity, get_admrule_path, is_repeal_revision, reset_path_registry, xml_to_markdown
 
 SNAPSHOT_NAME = "current_snapshot.json"
+logger = logging.getLogger(__name__)
 
 
 def write_current_snapshot(entries: list[dict], history_entries: list[dict] | None = None, *, repo: Path | None = None, workers: int = 1) -> dict:
     """Publish a complete source selection only after all selected XML is available."""
-    from .api_client import get_admrule_detail
+    from .api_client import NoResultError, get_admrule_detail
     from .import_admrules import metadata_from_raw
 
     previous = load_current_snapshot()
@@ -57,8 +59,11 @@ def write_current_snapshot(entries: list[dict], history_entries: list[dict] | No
     else:
         candidates = history_entries
         if previous:
+            recheck_serials = set(previous["rules"].values())
+            recheck_serials.update(entry["serial"] for entry in previous.get("excluded", [])
+                                   if entry.get("reason") == "live_detail_no_result")
             candidates = candidates + [metadata_from_raw(cache.get_detail(serial))
-                                       for serial in previous["rules"].values() if cache.get_detail(serial)]
+                                       for serial in recheck_serials if cache.get_detail(serial)]
         else:
             listed = {entry.get("행정규칙일련번호") for entry in history_entries}
             candidates = candidates + [metadata_from_raw(cache.get_detail(serial))
@@ -79,7 +84,12 @@ def write_current_snapshot(entries: list[dict], history_entries: list[dict] | No
         metadata = metadata_from_raw(raw)
         if metadata.get("현행여부") != "Y" or is_repeal_revision(metadata):
             continue
-        raw = get_admrule_detail(serial, refresh=True)
+        try:
+            raw = get_admrule_detail(serial, refresh=True)
+        except NoResultError:
+            excluded.append({"id": identity, "serial": serial, "reason": "live_detail_no_result"})
+            logger.warning("Current list omits admrule %s/%s and live detail has no result. The pipeline preserves cached history.", identity, serial)
+            continue
         metadata = metadata_from_raw(raw)
         if admrule_identity(metadata) != identity or metadata["행정규칙일련번호"] != serial:
             raise RuntimeError(f"Supplemental admrule identity mismatch: {identity}/{serial}")

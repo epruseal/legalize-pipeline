@@ -22,6 +22,10 @@ logger = logging.getLogger(__name__)
 _throttle = Throttle(REQUEST_DELAY_SECONDS)
 
 
+class NoResultError(RuntimeError):
+    """Raised when the detail endpoint explicitly reports no matching rule."""
+
+
 def _request(url: str, params: dict) -> requests.Response:
     return make_request(
         url,
@@ -40,6 +44,8 @@ def _require_no_api_error(root: ElementTree.Element, context: str) -> None:
 
 
 def _require_admrule_detail_root(root: ElementTree.Element, serial_no: str) -> None:
+    if root.tag == "Law" and "일치하는 행정규칙이 없습니다" in "".join(root.itertext()):
+        raise NoResultError(f"no admrule detail for ID={serial_no}")
     if root.tag != "AdmRulService":
         raise RuntimeError(f"unexpected admrule detail root tag for ID={serial_no}: {root.tag}")
 

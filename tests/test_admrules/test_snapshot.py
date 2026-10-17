@@ -169,6 +169,9 @@ def test_current_identity_change_refreshes_detail_before_selection(tmp_path, mon
 
 @pytest.mark.parametrize("response, message", [
     ("<Law><result>사용자 정보 검증에 실패</result><msg>bad key</msg></Law>", "API error"),
+    ("<Law><result>사용자 정보 검증에 실패</result><msg>일치하는 행정규칙이 없습니다</msg></Law>", "API error"),
+    ("<html><body>일치하는 행정규칙이 없습니다</body></html>", "unexpected admrule detail root"),
+    ("<Law>일시적인 서버 오류입니다.</Law>", "unexpected admrule detail root"),
     ("<Law/>", "unexpected admrule detail root"),
 ])
 def test_api_failure_during_absent_rule_probe_preserves_selection(tmp_path, monkeypatch, response, message):
@@ -186,6 +189,80 @@ def test_api_failure_during_absent_rule_probe_preserves_selection(tmp_path, monk
         snapshot.write_current_snapshot([source_row("1")], history_entries=[])
     assert path.read_bytes() == before
     assert cache.get_detail("2") == detail("2").replace(b">123<", b">456<")
+
+
+@pytest.mark.parametrize("entrypoint", ["update", "fetch_cache"])
+def test_absent_rule_no_result_excludes_current_but_preserves_history(tmp_path, monkeypatch, caplog, entrypoint):
+    import sys
+    from types import SimpleNamespace
+    from admrules import api_client
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path / "cache")
+    monkeypatch.setattr(fetch_cache, "record_requests", lambda *args, **kwargs: None)
+    cache.put_detail("1", detail("1"))
+    withdrawn = detail("2", name="목록에서 제외된 규정").replace(b">123<", b">456<")
+    cache.put_detail("2", withdrawn)
+    snapshot.write_current_snapshot([source_row("1"), source_row("2", 행정규칙ID="456")])
+    repo = tmp_path / "out"
+    init_repo(repo)
+    assert import_from_cache(repo, commit=True)["committed"] == 2
+
+    response = "<Law>일치하는 행정규칙이 없습니다. 행정규칙명을 확인하여 주십시오.</Law>".encode()
+    monkeypatch.setattr(api_client, "_request", lambda *args: SimpleNamespace(content=response))
+    rows = [source_row("1")]
+    monkeypatch.setattr(fetch_cache, "fetch_all_current", lambda **kwargs: rows)
+    monkeypatch.setattr(update, "fetch_all_current", lambda **kwargs: rows)
+    if entrypoint == "update":
+        assert update.run(repo=repo, commit=True)["snapshot_deleted"] == 1
+    else:
+        monkeypatch.setattr(sys, "argv", ["admrules.fetch_cache", "--skip-quota-check"])
+        fetch_cache.main()
+        snapshot.reconcile_current_snapshot(repo, commit=True)
+
+    selection = snapshot.load_current_snapshot()
+    assert selection["rules"] == {"123": "1"}
+    assert selection["excluded"] == [{"id": "456", "serial": "2", "reason": "live_detail_no_result"}]
+    assert "456/2" in caplog.text
+    assert cache.get_detail("2") == withdrawn
+    files = list(repo.rglob("본문.md"))
+    assert len(files) == 1 and "본문 1" in files[0].read_text()
+    history = subprocess.check_output(["git", "-C", str(repo), "log", "--format=%B"], text=True)
+    assert "행정규칙일련번호: 2" in history
+    assert validate_current_snapshot(repo, cache.CACHE_DIR / snapshot.SNAPSHOT_NAME) == []
+
+    head = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"])
+    repeated = snapshot.write_current_snapshot(rows, history_entries=[])
+    assert repeated["rules"] == selection["rules"]
+    assert repeated["excluded"] == selection["excluded"]
+    assert snapshot.reconcile_current_snapshot(repo, commit=True)["snapshot_committed"] == 0
+    assert subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"]) == head
+    assert cache.get_detail("2") == withdrawn
+
+    monkeypatch.setattr(api_client, "_request", lambda *args: SimpleNamespace(content=withdrawn))
+    recovered = snapshot.write_current_snapshot(rows, history_entries=[])
+    assert recovered["rules"] == {"123": "1", "456": "2"}
+    assert recovered["excluded"] == []
+    snapshot.reconcile_current_snapshot(repo)
+    assert len(list(repo.rglob("본문.md"))) == 2
+
+
+def test_current_list_no_result_still_preserves_previous_snapshot(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from admrules import api_client
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path / "cache")
+    cache.put_detail("1", detail("1"))
+    snapshot.write_current_snapshot([source_row("1")])
+    path = cache.CACHE_DIR / snapshot.SNAPSHOT_NAME
+    before = path.read_bytes()
+    wrong_identity = detail("1").replace(b">123<", b">456<")
+    cache.put_detail("1", wrong_identity)
+    response = "<Law>일치하는 행정규칙이 없습니다.</Law>".encode()
+    monkeypatch.setattr(api_client, "_request", lambda *args: SimpleNamespace(content=response))
+
+    with pytest.raises(RuntimeError):
+        snapshot.write_current_snapshot([source_row("1")])
+
+    assert path.read_bytes() == before
+    assert cache.get_detail("1") == wrong_identity
 
 
 @pytest.mark.parametrize("entrypoint", ["update", "import"])
