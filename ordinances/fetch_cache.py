@@ -209,7 +209,7 @@ def _fetch_detail_task(
         checkpoint.mark_detail_processed(cache_key)
         counter.inc("fetched")
     except NoResultError:
-        if ordinance_mst:
+        if ordinance_mst and not refresh:
             cache.add_no_result_serial(ordinance_mst)
             counter.inc("no_result")
             return
@@ -220,6 +220,7 @@ def _fetch_detail_task(
         if (
             isinstance(exc, requests.HTTPError)
             and ordinance_mst
+            and not refresh
             and exc.response is not None
             and exc.response.status_code == 404
         ):

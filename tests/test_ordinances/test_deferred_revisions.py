@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from xml.etree import ElementTree
 
 import pytest
+import requests
 
 from ordinances import api_client, cache, checkpoint, deferred_revisions, fetch_cache, update
 from ordinances.converter import parse_ordinance_xml
@@ -145,6 +146,26 @@ def test_refresh_error_does_not_use_previous_deferral_to_succeed(tmp_path, monke
     with pytest.raises(SystemExit, match="fetch_errors=2"):
         update.main()
     assert all(path.read_bytes() == content for path, content in old.items())
+
+
+@pytest.mark.parametrize("response_kind", ["http_404", "no_result_xml"])
+def test_missing_reviewed_source_does_not_use_previous_deferral(tmp_path, monkeypatch, response_kind):
+    repo, raws, rows, old, requests_seen = prepare(tmp_path, monkeypatch)
+
+    def unavailable(*args, **kwargs):
+        if response_kind == "http_404":
+            response = requests.Response()
+            response.status_code = 404
+            raise requests.HTTPError("404 Not Found", response=response)
+        return SimpleNamespace(content="<Law>일치하는 자치법규가 없습니다.</Law>".encode())
+
+    monkeypatch.setattr(api_client, "_request", unavailable)
+    monkeypatch.setattr(sys, "argv", ["ordinances.update", "--repo", str(repo), "--workers", "1", "--commit"])
+    with pytest.raises(SystemExit, match="fetch_errors=2"):
+        update.main()
+    assert all(path.read_bytes() == content for path, content in old.items())
+    assert all(cache.get_detail(serial, historical=True) == raw for serial, raw in raws.items())
+    assert cache.load_no_result_serials() == set()
 
 
 def test_unreviewed_duplicate_is_not_deferred(tmp_path, monkeypatch):
