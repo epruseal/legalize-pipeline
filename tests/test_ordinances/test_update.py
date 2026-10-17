@@ -13,7 +13,7 @@ def isolate_reviewed_source_defects(monkeypatch):
 def test_run_fetches_then_imports(tmp_path, monkeypatch):
     class Counter:
         def snapshot(self):
-            return (1, 2, 3)
+            return (1, 2, 0)
 
     calls = []
     monkeypatch.setattr(
@@ -31,7 +31,7 @@ def test_run_fetches_then_imports(tmp_path, monkeypatch):
             {"자치법규ID": "1", "자치법규일련번호": "current", "자치법규명": "현재 조례", "공포일자": "20260101"},
         ],
     )
-    monkeypatch.setattr(update, "fetch_details", lambda entries, workers, limit=None: calls.append(("details", entries, workers, limit)) or Counter())
+    monkeypatch.setattr(update, "fetch_details", lambda entries, workers, limit=None, refresh_cached=False: calls.append(("details", entries, workers, limit, refresh_cached)) or Counter())
     monkeypatch.setattr(update, "_committed_metadata", lambda repo: (set(), set()))
     monkeypatch.setattr(
         update,
@@ -46,7 +46,7 @@ def test_run_fetches_then_imports(tmp_path, monkeypatch):
     assert stats == {
         "cached": 1,
         "fetched": 2,
-        "fetch_errors": 3,
+        "fetch_errors": 0,
         "deferred": 0,
         "written": 4,
         "committed": 5,
@@ -57,6 +57,7 @@ def test_run_fetches_then_imports(tmp_path, monkeypatch):
     assert calls[0] == ("fetch", ["조례"], {"org": "11", "sborg": "110", "max_entries": 10, "date_range": "20260101~20260115"})
     assert calls[2][0] == "details"
     assert [entry["자치법규일련번호"] for entry in calls[2][1]] == ["old", "current"]
+    assert calls[2][4] is True
     assert calls[3] == ("import", tmp_path, None, True, ["old", "current"], False)
 
 
@@ -81,7 +82,7 @@ def test_run_imports_only_uncommitted_serials_for_existing_identity(tmp_path, mo
             {"자치법규ID": "1", "자치법규일련번호": "new", "자치법규명": "현재 조례", "공포일자": "20260102"},
         ],
     )
-    monkeypatch.setattr(update, "fetch_details", lambda entries, workers, limit=None: Counter())
+    monkeypatch.setattr(update, "fetch_details", lambda entries, workers, limit=None, refresh_cached=False: Counter())
     monkeypatch.setattr(update, "_committed_metadata", lambda repo: ({"already"}, {"1"}))
     monkeypatch.setattr(
         update,
@@ -120,7 +121,8 @@ def test_committed_metadata_reads_git_history_once(tmp_path, monkeypatch):
 
 def _prepare_update(tmp_path, monkeypatch):
     import subprocess
-    from ordinances import cache
+    from types import SimpleNamespace
+    from ordinances import api_client, cache, checkpoint, fetch_cache
     from tests.test_ordinances.test_converter import SAMPLE_XML
 
     repo = tmp_path / "repo"
@@ -131,6 +133,10 @@ def _prepare_update(tmp_path, monkeypatch):
     subprocess.run(["git", "-C", str(repo), "commit", "--allow-empty", "-m", "initial"], check=True, capture_output=True)
     monkeypatch.setattr(cache, "CACHE_DIR", tmp_path / "cache")
     monkeypatch.setattr(cache, "HISTORY_DIR", tmp_path / "cache/history")
+    monkeypatch.setattr(checkpoint, "CHECKPOINT_FILE", tmp_path / "checkpoint.json")
+    monkeypatch.setattr(fetch_cache, "record_requests", lambda *args, **kwargs: None)
+    monkeypatch.setattr(fetch_cache, "append_failure", lambda *args, **kwargs: None)
+    monkeypatch.setattr(api_client, "_request", lambda url, params, **kwargs: SimpleNamespace(content=cache.get_detail(params["MST"], historical=True)))
     cache.put_detail("12345", SAMPLE_XML.encode(), historical=True)
     entry = {"자치법규ID": "2000111", "자치법규일련번호": "12345", "공포일자": "20261011"}
     monkeypatch.setattr(update, "fetch_all_current", lambda *args, **kwargs: [entry])
@@ -163,7 +169,7 @@ def test_cli_rejects_parse_error_and_recovers_on_next_run(tmp_path, monkeypatch)
     repo = _prepare_update(tmp_path, monkeypatch)
     cache.put_detail("12345", b"<broken", historical=True)
     monkeypatch.setattr(sys, "argv", ["ordinances.update", "--repo", str(repo), "--commit"])
-    with pytest.raises(SystemExit, match="errors=1"):
+    with pytest.raises(SystemExit, match="fetch_errors=1"):
         update.main()
     assert not list(repo.rglob("본문.md"))
     cache.put_detail("12345", SAMPLE_XML.encode(), historical=True)
@@ -226,12 +232,13 @@ def test_partial_import_recovers_without_reimporting_successful_revisions(tmp_pa
     ]
     monkeypatch.setattr(update, "fetch_all_current", lambda *args, **kwargs: entries)
     monkeypatch.setattr(update, "fetch_history_for_entries", lambda *args, **kwargs: entries)
-    cache.put_detail("12346", b"<broken", historical=True)
+    fixed_xml = SAMPLE_XML.replace("2000111", "2000112").replace("12345", "12346")
+    duplicate = '<조><조문번호>000100</조문번호><조문여부>Y</조문여부><조내용>제1조 중복</조내용></조>'
+    cache.put_detail("12346", fixed_xml.replace('</자치법규>', duplicate + '</자치법규>').encode(), historical=True)
     monkeypatch.setattr(sys, "argv", ["ordinances.update", "--repo", str(repo), "--commit"])
     with pytest.raises(SystemExit, match="errors=1, missing=1"):
         update.main()
     assert update._committed_metadata(repo)[0] == {"12345"}
-    fixed_xml = SAMPLE_XML.replace("2000111", "2000112").replace("12345", "12346")
     cache.put_detail("12346", fixed_xml.encode(), historical=True)
     stats = update.run(repo=repo, commit=True)
     assert stats["committed"] == 1

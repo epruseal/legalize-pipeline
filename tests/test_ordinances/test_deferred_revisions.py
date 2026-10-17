@@ -57,7 +57,11 @@ def prepare(tmp_path, monkeypatch):
 
     def request(url, params, **kwargs):
         requests.append(params["MST"])
-        return SimpleNamespace(content=raws[params["MST"]])
+        raw = raws.get(params["MST"])
+        if raw is None:
+            raw = cache.get_detail(params["MST"], historical=True)
+        assert raw is not None
+        return SimpleNamespace(content=raw)
 
     monkeypatch.setattr(api_client, "_request", request)
     return repo, raws, rows, old, requests
@@ -76,7 +80,7 @@ def test_daily_update_defers_reviewed_sources_and_preserves_publications(tmp_pat
     committed = update._committed_metadata(repo)[0]
     assert "12345" in committed
     assert not committed.intersection(raws)
-    assert set(requests) == set(raws)
+    assert set(requests) == set(raws) | {"12345"}
     assert all(serial in summary.read_text() for serial in raws)
     head = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"])
     repeat = update.run(repo=repo, workers=1, commit=True)
@@ -138,7 +142,9 @@ def test_review_requires_exact_source_error_and_unexpired_fingerprint(serial):
 def test_refresh_error_does_not_use_previous_deferral_to_succeed(tmp_path, monkeypatch):
     repo, raws, rows, old, requests = prepare(tmp_path, monkeypatch)
 
-    def unavailable(*args, **kwargs):
+    def unavailable(url, params, **kwargs):
+        if params["MST"] == "12345":
+            return SimpleNamespace(content=SAMPLE_XML.encode())
         raise RuntimeError("temporary upstream outage")
 
     monkeypatch.setattr(api_client, "_request", unavailable)
@@ -146,13 +152,16 @@ def test_refresh_error_does_not_use_previous_deferral_to_succeed(tmp_path, monke
     with pytest.raises(SystemExit, match="fetch_errors=2"):
         update.main()
     assert all(path.read_bytes() == content for path, content in old.items())
+    assert "12345" not in update._committed_metadata(repo)[0]
 
 
 @pytest.mark.parametrize("response_kind", ["http_404", "no_result_xml"])
 def test_missing_reviewed_source_does_not_use_previous_deferral(tmp_path, monkeypatch, response_kind):
     repo, raws, rows, old, requests_seen = prepare(tmp_path, monkeypatch)
 
-    def unavailable(*args, **kwargs):
+    def unavailable(url, params, **kwargs):
+        if params["MST"] == "12345":
+            return SimpleNamespace(content=SAMPLE_XML.encode())
         if response_kind == "http_404":
             response = requests.Response()
             response.status_code = 404
@@ -166,6 +175,7 @@ def test_missing_reviewed_source_does_not_use_previous_deferral(tmp_path, monkey
     assert all(path.read_bytes() == content for path, content in old.items())
     assert all(cache.get_detail(serial, historical=True) == raw for serial, raw in raws.items())
     assert cache.load_no_result_serials() == set()
+    assert "12345" not in update._committed_metadata(repo)[0]
 
 
 def test_unreviewed_duplicate_is_not_deferred(tmp_path, monkeypatch):
@@ -183,7 +193,7 @@ def test_filtered_probe_does_not_fetch_unselected_reviewed_revisions(tmp_path, m
     rows[:] = rows[:1]
     stats = update.run(repo=repo, workers=1, commit=True, org="11")
     assert stats["errors"] == stats["missing"] == stats["deferred"] == 0
-    assert requests == []
+    assert requests == ["12345"]
 
 
 def test_reviewed_history_is_retried_even_when_present_outside_date_window(tmp_path, monkeypatch):
@@ -191,7 +201,7 @@ def test_reviewed_history_is_retried_even_when_present_outside_date_window(tmp_p
     monkeypatch.setattr(update, "_date_range", lambda days: "20261027~20261030")
     stats = update.run(repo=repo, workers=1, commit=True)
     assert stats["deferred"] == 2
-    assert set(requests) == set(raws)
+    assert set(requests) == set(raws) | {"12345"}
 
 
 def test_expired_review_still_blocks_even_without_new_search_results(tmp_path, monkeypatch):

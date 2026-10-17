@@ -193,12 +193,15 @@ def _fetch_detail_task(
     ordinance_mst: str,
     counter: Counter,
     quota: _QuotaBatch,
+    refresh_cached: bool = False,
 ) -> None:
     cache_key = str(ordinance_mst or ordinance_id)
     refresh = ordinance_mst in deferred_revisions.load_entries()
     if not refresh and cache.get_detail(cache_key, historical=bool(ordinance_mst)) is not None:
-        counter.inc("cached")
-        return
+        if not refresh_cached:
+            counter.inc("cached")
+            return
+        refresh = True
     try:
         get_ordinance_detail(
             ordinance_id,
@@ -227,7 +230,7 @@ def _fetch_detail_task(
             cache.add_no_result_serial(ordinance_mst)
             counter.inc("no_result")
             return
-        entry = detail_failure_allowlist.accepted_entry(ordinance_mst, exc)
+        entry = None if refresh else detail_failure_allowlist.accepted_entry(ordinance_mst, exc)
         if entry is not None:
             logger.warning(
                 "Known upstream ordinance detail failure MST=%s: %s [%s]",
@@ -242,7 +245,13 @@ def _fetch_detail_task(
         counter.inc("errors")
 
 
-def fetch_details(entries: list[dict], workers: int = CONCURRENT_WORKERS, limit: int | None = None) -> Counter:
+def fetch_details(
+    entries: list[dict],
+    workers: int = CONCURRENT_WORKERS,
+    limit: int | None = None,
+    *,
+    refresh_cached: bool = False,
+) -> Counter:
     ids = []
     seen = set()
     for entry in entries:
@@ -267,7 +276,7 @@ def fetch_details(entries: list[dict], workers: int = CONCURRENT_WORKERS, limit:
             ordinance_id, ordinance_mst = next(source)
         except StopIteration:
             return False
-        pending.add(pool.submit(_fetch_detail_task, ordinance_id, ordinance_mst, counter, quota))
+        pending.add(pool.submit(_fetch_detail_task, ordinance_id, ordinance_mst, counter, quota, refresh_cached))
         return True
 
     for _ in range(min(workers, len(ids))):

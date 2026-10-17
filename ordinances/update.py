@@ -131,14 +131,14 @@ def run(
         for entry in entries
         if (str(entry.get("자치법규일련번호", "")) or str(entry.get("자치법규ID", ""))) in import_serial_set
     ]
-    fetch_counter = fetch_details(fetch_entries, workers=workers)
+    fetch_counter = fetch_details(fetch_entries, workers=workers, refresh_cached=commit)
     cached, fetched, fetch_errors = fetch_counter.snapshot()
-    deferred = _deferred_serials(import_serials) if commit else set()
+    deferred = _deferred_serials(import_serials) if commit and not fetch_errors else set()
     import_stats = import_from_cache(
         repo,
         limit=None,
         commit=commit,
-        serials=[serial for serial in import_serials if serial not in deferred],
+        serials=[serial for serial in import_serials if serial not in deferred] if not fetch_errors else [],
         skip_dedup=False,
     )
     stats = {

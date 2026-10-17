@@ -248,6 +248,31 @@ def test_fetch_details_accepts_allowlisted_http_error(monkeypatch):
     assert failures == []
 
 
+def test_cached_refresh_does_not_accept_allowlisted_fetch_failure(monkeypatch):
+    failures = []
+
+    def raise_500(ordinance_id, mst="", refresh=False, on_request_attempt=None):
+        assert refresh is True
+        on_request_attempt()
+        response = requests.Response()
+        response.status_code = 500
+        raise requests.HTTPError("500 Server Error: Internal Server Error", response=response)
+
+    monkeypatch.setattr(fetch_cache.cache, "get_detail", lambda cache_key, **kwargs: b"previous snapshot")
+    monkeypatch.setattr(fetch_cache, "get_ordinance_detail", raise_500)
+    monkeypatch.setattr(fetch_cache, "append_failure", lambda row: failures.append(row))
+    monkeypatch.setattr(fetch_cache, "record_requests", lambda count, corpus: None)
+
+    counter = fetch_cache.fetch_details(
+        [{"자치법규ID": "2050384", "자치법규일련번호": "899529"}],
+        workers=1,
+        refresh_cached=True,
+    )
+
+    assert counter.snapshot_all() == {"cached": 0, "fetched": 0, "errors": 1}
+    assert len(failures) == 1
+
+
 def test_fetch_details_records_history_no_result_xml(monkeypatch):
     no_results = []
 
