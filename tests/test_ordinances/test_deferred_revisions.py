@@ -15,13 +15,17 @@ from ordinances.converter import parse_ordinance_xml
 from tests.test_ordinances.test_converter import SAMPLE_XML
 
 FIXTURES = Path(__file__).parents[1] / "fixtures" / "ordinances"
+REVIEWED_SOURCES = {
+    "2178401": FIXTURES / "upstream-2178401.xml",
+    "2178653": FIXTURES / "upstream-2178653-20261018.xml",
+}
 
 
 def prepare(tmp_path, monkeypatch):
     class ReviewDate(date):
         @classmethod
         def today(cls):
-            return cls(2026, 10, 17)
+            return cls(2026, 10, 18)
 
     monkeypatch.setattr(deferred_revisions, "date", ReviewDate)
     repo = tmp_path / "repo"
@@ -33,8 +37,7 @@ def prepare(tmp_path, monkeypatch):
     monkeypatch.setattr(checkpoint, "CHECKPOINT_FILE", tmp_path / "checkpoint.json")
     monkeypatch.setattr(fetch_cache, "record_requests", lambda *args, **kwargs: None)
     monkeypatch.setattr(fetch_cache, "append_failure", lambda *args, **kwargs: None)
-    raws = {serial: (FIXTURES / f"upstream-{serial}.xml").read_bytes()
-            for serial in ("2178401", "2178653")}
+    raws = {serial: path.read_bytes() for serial, path in REVIEWED_SOURCES.items()}
     rows = [{"자치법규ID": "2000111", "자치법규일련번호": "12345", "공포일자": "20261017"}]
     old = {}
     for serial, raw in raws.items():
@@ -128,15 +131,34 @@ def test_corrected_source_is_retried_outside_lookback_and_imported(tmp_path, mon
 
 @pytest.mark.parametrize("serial", ["2178401", "2178653"])
 def test_review_requires_exact_source_error_and_unexpired_fingerprint(serial):
-    raw = (FIXTURES / f"upstream-{serial}.xml").read_bytes()
+    raw = REVIEWED_SOURCES[serial].read_bytes()
     with pytest.raises(ValueError) as caught:
         parse_ordinance_xml(raw)
-    today = date(2026, 10, 17)
+    today = date(2026, 10, 18)
     assert deferred_revisions.accepted_entry(serial, raw, caught.value, today) is not None
     assert deferred_revisions.accepted_entry("unknown", raw, caught.value, today) is None
     assert deferred_revisions.accepted_entry(serial, raw + b"\n", caught.value, today) is None
     assert deferred_revisions.accepted_entry(serial, raw, ValueError("different defect"), today) is None
     assert deferred_revisions.accepted_entry(serial, raw, caught.value, date(2026, 10, 31)) is None
+
+
+def test_re_reviewed_attachment_references_require_exact_new_bytes():
+    previous = (FIXTURES / "upstream-2178653.xml").read_bytes()
+    current = REVIEWED_SOURCES["2178653"].read_bytes()
+    previous_xml = ElementTree.fromstring(previous)
+    current_xml = ElementTree.fromstring(current)
+    restored = current
+    for old, new in zip(previous_xml.findall(".//별표단위"), current_xml.findall(".//별표단위"), strict=True):
+        for before, after in [(old.attrib["별표키"], new.attrib["별표키"]),
+                              (old.findtext("별표첨부파일명"), new.findtext("별표첨부파일명"))]:
+            assert before != after
+            restored = restored.replace(after.encode(), before.encode())
+    assert restored == previous
+    for raw, accepted in [(current, True), (previous, False)]:
+        with pytest.raises(ValueError, match="duplicate ordinance article 1") as caught:
+            parse_ordinance_xml(raw)
+        entry = deferred_revisions.accepted_entry("2178653", raw, caught.value, date(2026, 10, 18))
+        assert (entry is not None) == accepted
 
 
 def test_refresh_error_does_not_use_previous_deferral_to_succeed(tmp_path, monkeypatch):

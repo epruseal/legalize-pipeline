@@ -18,9 +18,10 @@ entries:
     자치법규ID: "2092891"
     자치법규명: "연천군 지방공무원 여비 조례"
     공포일자: "20261013"
-    sha256: "27b30cf736e86427cddc66fad5248c136e5ea780e47810e21d157f05640cd71a"
+    # Re-reviewed the changed attachment keys and URLs. Article text is unchanged.
+    sha256: "591edf0d3a49cab2878d33ffcea7558e6f8a8c58b021d33a5113385134fe793b"
     expected_error: "duplicate ordinance article 1"
-    checked_on: "2026-10-17"
+    checked_on: "2026-10-18"
     expires_on: "2026-10-31"
     reason: "Addendum articles are interleaved with the main articles in the API response."
     sources:
