@@ -252,8 +252,10 @@ def test_preview_keeps_strict_validation(tmp_path, monkeypatch):
 def test_corrected_reviewed_revision_must_keep_its_identity(tmp_path, monkeypatch):
     repo, raws, rows, old, requests = prepare(tmp_path, monkeypatch)
     raws["2178401"] = SAMPLE_XML.replace("12345", "2178401").encode()
-    with pytest.raises(ValueError, match="different identity"):
-        update.run(repo=repo, workers=1, commit=True)
+    stats = update.run(repo=repo, workers=1, commit=True)
+    assert stats["fetch_errors"] == 1
+    assert stats["committed"] == 0
+    assert cache.get_detail("2178401", historical=True) == REVIEWED_SOURCES["2178401"].read_bytes()
     assert all(path.read_bytes() == content for path, content in old.items())
 
 

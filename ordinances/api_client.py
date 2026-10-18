@@ -154,7 +154,7 @@ def get_ordinance_detail(
         raise RuntimeError(
             f"ordin detail MST={mst} returned invalid 자치법규일련번호={actual_serial or '<missing>'}"
         )
-    if not mst and actual_id != str(ordinance_id):
+    if actual_id != str(ordinance_id):
         raise RuntimeError(
             f"ordin detail ID={ordinance_id} returned invalid 자치법규ID={actual_id or '<missing>'}"
         )

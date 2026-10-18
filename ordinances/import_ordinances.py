@@ -112,6 +112,14 @@ def import_from_cache(
             continue
         try:
             detail = parse_ordinance_xml(raw)
+            if serials is not None or cache_key.startswith("history/"):
+                expected_serial = cache_key.removeprefix("history/")
+                actual_serial = str(detail["metadata"].get("자치법규일련번호", ""))
+                if actual_serial != expected_serial:
+                    raise ValueError(
+                        f"history cache key {expected_serial} returned invalid "
+                        f"자치법규일련번호={actual_serial or '<missing>'}"
+                    )
             serial = str(detail["metadata"].get("자치법규일련번호") or cache_key)
             ordinance_id = str(detail["metadata"].get("자치법규ID") or cache_key)
             candidate = {

@@ -60,6 +60,14 @@ def prepare(tmp_path, monkeypatch):
             raise requests.HTTPError("404 Not Found", response=missing)
         if response["kind"] == "no_result":
             return SimpleNamespace(content="<Law>일치하는 자치법규가 없습니다.</Law>".encode())
+        if response["kind"] == "wrong_id":
+            return SimpleNamespace(content=fresh.replace(b"2263618", b"9999999"))
+        if response["kind"] == "missing_id":
+            return SimpleNamespace(content=fresh.replace("<자치법규ID>2263618</자치법규ID>".encode(), b""))
+        if response["kind"] == "wrong_mst":
+            return SimpleNamespace(content=fresh.replace(b"2178831", b"9999999"))
+        if response["kind"] == "malformed":
+            return SimpleNamespace(content=b"<broken")
         return SimpleNamespace(content=fresh)
 
     monkeypatch.setattr(api_client, "_request", request)
@@ -85,7 +93,7 @@ def test_first_publication_refreshes_valid_cache_and_preserves_source_annotation
     assert git(repo, "rev-parse", "HEAD") == head
 
 
-@pytest.mark.parametrize("failure", ["error", "404", "no_result"])
+@pytest.mark.parametrize("failure", ["error", "404", "no_result", "wrong_id", "missing_id", "wrong_mst", "malformed"])
 def test_failed_refresh_preserves_previous_publication_and_retries(tmp_path, monkeypatch, failure):
     repo, target, fresh, stale, response, requests_seen = prepare(tmp_path, monkeypatch)
     head = git(repo, "rev-parse", "HEAD")
