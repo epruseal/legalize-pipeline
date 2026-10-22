@@ -96,15 +96,29 @@ def test_daily_update_defers_reviewed_sources_and_preserves_publications(tmp_pat
     assert subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"]) == head
 
 
-def test_changed_invalid_source_still_blocks_publication(tmp_path, monkeypatch):
+@pytest.mark.parametrize("serial, original", [("2178401", "디자인클리닉"), ("2178653", "지급구분")])
+def test_changed_invalid_source_still_blocks_publication(tmp_path, monkeypatch, serial, original):
     repo, raws, rows, old, requests = prepare(tmp_path, monkeypatch)
-    raws["2178401"] = raws["2178401"].replace("디자인클리닉".encode(), "변경된 내용".encode())
+    raws[serial] = raws[serial].replace(original.encode(), "변경된 내용".encode())
     monkeypatch.setattr(sys, "argv", ["ordinances.update", "--repo", str(repo), "--workers", "1", "--commit"])
 
     with pytest.raises(SystemExit, match="errors=1, missing=1"):
         update.main()
 
     assert all(path.read_bytes() == content for path, content in old.items())
+
+
+def test_daily_update_accepts_rotated_attachment_locators(tmp_path, monkeypatch):
+    repo, raws, rows, old, requests = prepare(tmp_path, monkeypatch)
+    raws["2178653"] = (FIXTURES / "upstream-2178653-20261023.xml").read_bytes()
+    monkeypatch.setattr(sys, "argv", ["ordinances.update", "--repo", str(repo), "--workers", "1", "--commit"])
+
+    update.main()
+
+    assert all(path.read_bytes() == content for path, content in old.items())
+    assert cache.get_detail("2178653", historical=True) == raws["2178653"]
+    assert "12345" in update._committed_metadata(repo)[0]
+    assert "2178653" not in update._committed_metadata(repo)[0]
 
 
 def test_corrected_source_is_retried_outside_lookback_and_imported(tmp_path, monkeypatch):
@@ -142,12 +156,13 @@ def test_review_requires_exact_source_error_and_unexpired_fingerprint(serial):
     today = date(2026, 10, 18)
     assert deferred_revisions.accepted_entry(serial, raw, caught.value, today) is not None
     assert deferred_revisions.accepted_entry("unknown", raw, caught.value, today) is None
-    assert deferred_revisions.accepted_entry(serial, raw + b"\n", caught.value, today) is None
+    if serial != "2178653":
+        assert deferred_revisions.accepted_entry(serial, raw + b"\n", caught.value, today) is None
     assert deferred_revisions.accepted_entry(serial, raw, ValueError("different defect"), today) is None
     assert deferred_revisions.accepted_entry(serial, raw, caught.value, date(2026, 10, 31)) is None
 
 
-def test_re_reviewed_attachment_references_require_exact_new_bytes():
+def test_reviewed_attachment_locator_changes_keep_the_same_fingerprint():
     previous = (FIXTURES / "upstream-2178653.xml").read_bytes()
     current = REVIEWED_SOURCES["2178653"].read_bytes()
     previous_xml = ElementTree.fromstring(previous)
@@ -159,11 +174,73 @@ def test_re_reviewed_attachment_references_require_exact_new_bytes():
             assert before != after
             restored = restored.replace(after.encode(), before.encode())
     assert restored == previous
-    for raw, accepted in [(current, True), (previous, False)]:
+    latest = (FIXTURES / "upstream-2178653-20261023.xml").read_bytes()
+    assert deferred_revisions.attachment_locator_fingerprint(current) == deferred_revisions.attachment_locator_fingerprint(latest)
+    for raw in [current, previous, latest]:
         with pytest.raises(ValueError, match="duplicate ordinance article 1") as caught:
             parse_ordinance_xml(raw)
         entry = deferred_revisions.accepted_entry("2178653", raw, caught.value, date(2026, 10, 18))
-        assert (entry is not None) == accepted
+        assert entry is not None
+        assert deferred_revisions.accepted_entry("2178653", raw, caught.value, date(2026, 10, 31)) is None
+        assert deferred_revisions.accepted_entry("2178653", raw, ValueError("different defect"), date(2026, 10, 23)) is None
+
+
+@pytest.mark.parametrize("change", [
+    "article", "addendum", "identity", "serial", "date", "title", "attachment_title",
+    "filename", "host", "scheme", "path", "query", "non_numeric_key", "non_numeric_sequence",
+    "remove_attachment", "add_attachment", "reorder_attachments", "extra_attribute", "extra_element",
+])
+def test_locator_review_rejects_other_source_changes(change):
+    root = ElementTree.fromstring((FIXTURES / "upstream-2178653-20261023.xml").read_bytes())
+    attachments = root.find("별표")
+    attachment = attachments.find("별표단위")
+    link = attachment.find("별표첨부파일명")
+    text_paths = {
+        "article": ".//조내용", "addendum": ".//부칙내용", "identity": ".//자치법규ID",
+        "serial": ".//자치법규일련번호", "date": ".//공포일자", "title": ".//자치법규명",
+        "attachment_title": ".//별표제목",
+    }
+    if change in text_paths:
+        node = root.find(text_paths[change])
+        node.text = (node.text or "") + " changed"
+    elif change == "filename":
+        link.text += "changed"
+    elif change == "host":
+        link.text = link.text.replace("www.law.go.kr", "example.invalid")
+    elif change == "scheme":
+        link.text = link.text.replace("http://", "https://")
+    elif change == "path":
+        link.text = link.text.replace("flDownload.do", "other.do")
+    elif change == "query":
+        link.text = link.text.replace("gubun=ELIS", "gubun=OTHER")
+    elif change == "non_numeric_key":
+        attachment.set("별표키", "unexpected")
+    elif change == "non_numeric_sequence":
+        link.text = link.text.replace("flSeq=", "flSeq=unexpected")
+    elif change == "remove_attachment":
+        attachments.remove(attachment)
+    elif change == "add_attachment":
+        attachments.append(ElementTree.fromstring(ElementTree.tostring(attachment, encoding="utf-8")))
+    elif change == "reorder_attachments":
+        attachments.remove(attachment)
+        attachments.append(attachment)
+    elif change == "extra_attribute":
+        attachment.set("new", "value")
+    elif change == "extra_element":
+        ElementTree.SubElement(attachment, "new").text = "value"
+    raw = ElementTree.tostring(root, encoding="utf-8")
+    assert deferred_revisions.accepted_entry(
+        "2178653", raw, ValueError("duplicate ordinance article 1"), date(2026, 10, 23)
+    ) is None
+
+
+def test_locator_mask_does_not_change_article_text():
+    raw = (FIXTURES / "upstream-2178653-20261023.xml").read_bytes()
+    root = ElementTree.fromstring(raw)
+    root.find(".//조내용").text += '\n별표키="123" flSeq=456'
+    first = ElementTree.tostring(root, encoding="utf-8")
+    second = first.replace(b'flSeq=456', b'flSeq=789')
+    assert deferred_revisions.attachment_locator_fingerprint(first) != deferred_revisions.attachment_locator_fingerprint(second)
 
 
 def test_refresh_error_does_not_use_previous_deferral_to_succeed(tmp_path, monkeypatch):

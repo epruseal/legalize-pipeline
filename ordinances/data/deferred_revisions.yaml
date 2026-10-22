@@ -1,6 +1,6 @@
 # These exact responses remain invalid. Daily updates retain the prior publication.
 # Every pending revision is fetched again, including outside the date window.
-# Changed invalid bytes, different errors, and expired reviews fail publication.
+# Changed invalid sources, different errors, and expired reviews fail publication.
 entries:
   - 자치법규일련번호: "2175357"
     자치법규ID: "2114443"
@@ -64,10 +64,11 @@ entries:
     자치법규ID: "2092891"
     자치법규명: "연천군 지방공무원 여비 조례"
     공포일자: "20261013"
-    # Re-reviewed the changed attachment keys and URLs. Article text is unchanged.
+    # Only numeric 별표키 and flSeq locators vary across the reviewed responses.
     sha256: "591edf0d3a49cab2878d33ffcea7558e6f8a8c58b021d33a5113385134fe793b"
+    attachment_locator_sha256: "21dfd72db33fa89127ce7fb99740e520a2981df8d43274c1e52b04b651111422"
     expected_error: "duplicate ordinance article 1"
-    checked_on: "2026-10-18"
+    checked_on: "2026-10-23"
     expires_on: "2026-10-31"
     reason: "Addendum articles are interleaved with the main articles in the API response."
     sources:
