@@ -1,6 +1,7 @@
 """Import cached ordinance XML into an ordinance-kr working tree."""
 
 import argparse
+import datetime
 import logging
 from pathlib import Path
 
@@ -45,9 +46,16 @@ def cached_entries(limit: int | None = None, serials: list[str] | None = None) -
     ]
 
 
+def _revision_date(metadata: dict) -> str:
+    try:
+        return datetime.date.fromisoformat(format_date(metadata.get("공포일자", ""))).isoformat()
+    except ValueError:
+        return "1970-01-01"
+
+
 def _sort_key(entry: dict) -> tuple[str, int, str]:
     metadata = entry["metadata"]
-    date = format_date(metadata.get("공포일자", "")) or "1970-01-01"
+    date = _revision_date(metadata)
     serial = str(metadata.get("자치법규일련번호", ""))
     try:
         serial_key = int(serial)
@@ -188,7 +196,7 @@ def import_from_cache(
                 if deleted_path:
                     counters["deleted"] += 1
                 if commit:
-                    date = format_date(meta.get("공포일자", "")) or "2000-01-01"
+                    date = _revision_date(meta)
                     if commit_ordinance_deletion(
                         repo_dir,
                         deleted_path,
@@ -211,7 +219,7 @@ def import_from_cache(
             atomic_write_text(target, entry["markdown"])
             counters["written"] += 1
             if commit:
-                date = format_date(meta.get("공포일자", "")) or "2000-01-01"
+                date = _revision_date(meta)
                 if commit_ordinance(
                     repo_dir,
                     rel_path,

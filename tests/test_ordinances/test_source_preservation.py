@@ -72,3 +72,34 @@ def test_repeal_preserves_source_in_deletion_commit(tmp_path, monkeypatch):
     _, markdown = xml_to_markdown(raw)
     assert message.rstrip().endswith(markdown[markdown.index("> " + SOURCE_WARNING):].rstrip())
     assert cache.get_detail("2178653", historical=True) == raw
+
+
+@pytest.mark.parametrize("raw_date", ["2000011 ", "9999999 ", "20261301", ""])
+def test_incomplete_dates_preserve_source_and_match_compiler_order(tmp_path, monkeypatch, raw_date):
+    from ordinances import cache
+    from ordinances.import_ordinances import import_from_cache
+    from tests.test_ordinances.test_converter import SAMPLE_XML
+
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path / "cache")
+    monkeypatch.setattr(cache, "HISTORY_DIR", tmp_path / "cache/history")
+    root = ElementTree.fromstring(SAMPLE_XML)
+    root.find(".//공포일자").text = "20210930"
+    valid = ElementTree.tostring(root, encoding="utf-8")
+    cache.put_detail("12345", valid, historical=True)
+    root.find(".//공포일자").text = raw_date
+    root.find(".//자치법규일련번호").text = "12346"
+    invalid = ElementTree.tostring(root, encoding="utf-8")
+    cache.put_detail("12346", invalid, historical=True)
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+    for key, value in [("user.name", "Test"), ("user.email", "test@example.invalid")]:
+        subprocess.run(["git", "-C", str(repo), "config", key, value], check=True)
+    stats = import_from_cache(repo, commit=True)
+    assert stats["errors"] == 0 and stats["committed"] == 2
+    dates = subprocess.check_output(["git", "-C", str(repo), "log", "--reverse", "--format=%aI"], text=True).splitlines()
+    assert dates == ["1970-01-01T12:00:00+09:00", "2021-09-30T12:00:00+09:00"]
+    path, expected = xml_to_markdown(invalid)
+    actual = subprocess.check_output(["git", "-C", str(repo), "show", f"HEAD~1:{path}"], text=True)
+    assert actual == expected
+    assert (repo / path).read_text() == xml_to_markdown(valid)[1]
+    assert cache.get_detail("12346", historical=True) == invalid
