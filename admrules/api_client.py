@@ -7,6 +7,7 @@ import requests
 
 from core.http import make_request
 from core.throttle import Throttle
+from core.xml import parse_xml
 
 from . import cache
 from .config import (
@@ -81,7 +82,7 @@ def search_admrules(
         params["prmlYd"] = date_range
 
     resp = _request(f"{LAW_API_BASE}/lawSearch.do", params)
-    root = ElementTree.fromstring(resp.content)
+    root, _raw = parse_xml(resp.content, context=f"admrul search page {page}")
     _require_no_api_error(root, f"admrul search page {page}")
 
     if root.tag != "AdmRulSearch" or root.findtext("totalCnt") is None:
@@ -128,7 +129,7 @@ def get_admrule_detail(serial_no: str | int, *, refresh: bool = False) -> bytes:
         "type": "XML",
     })
     raw = resp.content
-    root = ElementTree.fromstring(raw)
+    root, raw = parse_xml(raw, context=f"admrul detail ID={serial_no}")
     _require_no_api_error(root, f"admrul detail ID={serial_no}")
     _require_admrule_detail_root(root, serial_no)
     returned_serial = root.findtext(".//행정규칙일련번호") or root.findtext(".//ID")
@@ -156,7 +157,7 @@ def search_old_and_new(
         params["knd"] = str(knd)
 
     resp = _request(f"{LAW_API_BASE}/lawSearch.do", params)
-    root = ElementTree.fromstring(resp.content)
+    root, _raw = parse_xml(resp.content, context=f"admrulOldAndNew search page {page}")
     _require_no_api_error(root, f"admrulOldAndNew search page {page}")
     return {
         "totalCnt": int(root.findtext("totalCnt", "0")),

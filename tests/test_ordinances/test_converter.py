@@ -387,3 +387,9 @@ def test_quarantines_unsupported_type(tmp_path: Path, monkeypatch):
         converter.ordinance_to_markdown(detail)
 
     assert "type_quarantined" in failure_path.read_text(encoding="utf-8")
+
+
+def test_parse_ordinance_xml_repairs_bare_entity():
+    detail = converter.parse_ordinance_xml(SAMPLE_XML.replace("테스트 조례", "테스트 & 조례"))
+
+    assert detail["metadata"]["자치법규명"] == "서울특별시 테스트 & 조례"

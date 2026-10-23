@@ -143,3 +143,33 @@ def test_no_result_response_preserves_cached_revision(tmp_path, monkeypatch, fix
         api_client.get_admrule_detail("123", refresh=True)
 
     assert api_client.cache.get_detail("123") == previous
+
+
+def test_get_admrule_detail_repairs_entity_before_cache_write(monkeypatch):
+    stored = []
+    monkeypatch.setattr(api_client.cache, "get_detail", lambda serial: None)
+    monkeypatch.setattr(
+        api_client,
+        "_request",
+        lambda *args: Response("<AdmRulService><ID>123</ID><본문>A & B</본문></AdmRulService>".encode()),
+    )
+    monkeypatch.setattr(api_client.cache, "put_detail", lambda serial, raw: stored.append((serial, raw)))
+
+    raw = api_client.get_admrule_detail("123")
+
+    assert raw == "<AdmRulService><ID>123</ID><본문>A &amp; B</본문></AdmRulService>".encode()
+    assert stored == [("123", raw)]
+
+
+def test_get_admrule_detail_does_not_cache_malformed_xml(monkeypatch):
+    stored = []
+    monkeypatch.setattr(api_client.cache, "get_detail", lambda serial: None)
+    monkeypatch.setattr(api_client, "_request", lambda *args: Response("<AdmRulService><![CDATA[A & B".encode()))
+    monkeypatch.setattr(api_client.cache, "put_detail", lambda *args: stored.append(args))
+
+    import pytest
+    from xml.etree import ElementTree
+
+    with pytest.raises(ElementTree.ParseError):
+        api_client.get_admrule_detail("123")
+    assert stored == []

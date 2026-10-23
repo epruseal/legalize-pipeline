@@ -498,3 +498,15 @@ def test_live_attachment_only_rule_preserves_original_file_links(tmp_path, monke
     assert converter.has_current_content(fresh)
     assert validate_frontmatter(path) == []
     assert validate_current_snapshot(repo, cache.CACHE_DIR / snapshot.SNAPSHOT_NAME) == []
+
+
+def test_current_content_repairs_bare_entity_for_snapshot(tmp_path, monkeypatch):
+    from admrules import converter
+
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path / "cache")
+    raw = detail("1").replace(b"</AdmRulService>", "<본문>A & B</본문></AdmRulService>".encode())
+    cache.put_detail("1", raw)
+
+    assert converter.has_current_content(raw)
+    result = snapshot.write_current_snapshot([source_row("1")])
+    assert result["required_body_ids"] == ["123"]

@@ -9,6 +9,8 @@ from xml.etree import ElementTree
 
 import yaml
 
+from core.xml import parse_xml
+
 _PATH = Path(__file__).parent / "data" / "deferred_revisions.yaml"
 
 
@@ -20,7 +22,7 @@ def load_entries() -> dict[str, dict]:
 
 def attachment_locator_fingerprint(raw: bytes) -> str:
     """Hash the XML with only numeric attachment locators masked."""
-    root = ElementTree.fromstring(raw)
+    root, _raw = parse_xml(raw, context="deferred ordinance revision")
     for attachment in root.findall("./별표/별표단위"):
         if re.fullmatch(r"[0-9]+", attachment.get("별표키", "")):
             attachment.set("별표키", "<locator>")

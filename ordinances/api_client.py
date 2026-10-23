@@ -8,6 +8,7 @@ import requests
 
 from core.http import make_request
 from core.throttle import Throttle
+from core.xml import parse_xml
 
 from . import cache
 from .config import (
@@ -96,7 +97,7 @@ def search_ordinances(
     for attempt in range(MAX_RETRIES + 1):
         resp = _request(f"{LAW_API_BASE}/lawSearch.do", params)
         try:
-            root = ElementTree.fromstring(resp.content)
+            root, raw_xml = parse_xml(resp.content, context=f"ordin search page {page}")
             break
         except ElementTree.ParseError:
             if attempt == MAX_RETRIES:
@@ -113,7 +114,7 @@ def search_ordinances(
     items = []
     for item in _list_items(root):
         items.append({child.tag: child.text or "" for child in item})
-    return {"totalCnt": total, "page": page_num, "ordinances": items, "raw_xml": resp.content}
+    return {"totalCnt": total, "page": page_num, "ordinances": items, "raw_xml": raw_xml}
 
 
 def get_ordinance_detail(
@@ -143,7 +144,7 @@ def get_ordinance_detail(
         timeout=DETAIL_REQUEST_TIMEOUT_SECONDS,
         non_retry_statuses={404},
     )
-    root = ElementTree.fromstring(resp.content)
+    root, raw = parse_xml(resp.content, context=f"ordin detail ID={ordinance_id}")
     _require_no_api_error(root, f"ordin detail ID={ordinance_id}")
     root_text = "".join(root.itertext())
     if root.tag == "Law" and "일치하는 자치법규가 없습니다" in root_text:
@@ -158,5 +159,5 @@ def get_ordinance_detail(
         raise RuntimeError(
             f"ordin detail ID={ordinance_id} returned invalid 자치법규ID={actual_id or '<missing>'}"
         )
-    cache.put_detail(cache_key, resp.content, historical=historical)
-    return resp.content
+    cache.put_detail(cache_key, raw, historical=historical)
+    return raw

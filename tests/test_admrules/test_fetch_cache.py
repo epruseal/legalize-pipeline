@@ -195,3 +195,21 @@ def test_failed_details_never_prune_or_publish_snapshot(monkeypatch):
     monkeypatch.setattr(snapshot, "write_current_snapshot", forbidden)
     with pytest.raises(SystemExit):
         fetch_cache.main()
+
+
+@pytest.mark.parametrize(("status", "expected_refresh"), [("Y", False), ("N", True)])
+def test_cached_current_detail_repairs_bare_entity_before_refresh(monkeypatch, status, expected_refresh):
+    cached = f"<AdmRulService><현행여부>{status}</현행여부><본문>A & B</본문></AdmRulService>".encode()
+    calls = []
+    monkeypatch.setattr(fetch_cache.cache, "get_detail", lambda serial: cached)
+    monkeypatch.setattr(fetch_cache, "get_admrule_detail", lambda serial, **kwargs: calls.append((serial, kwargs)))
+
+    counter = Counter()
+    fetch_cache._fetch_detail_task("123", counter, refresh_current=True)
+
+    if expected_refresh:
+        assert calls == [("123", {"refresh": True})]
+        assert counter.snapshot() == (0, 1, 0)
+    else:
+        assert calls == []
+        assert counter.snapshot() == (1, 0, 0)
