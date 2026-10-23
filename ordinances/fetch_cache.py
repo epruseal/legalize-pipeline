@@ -11,7 +11,7 @@ import requests
 from core.counter import Counter
 from core.quota_budget import ensure_headroom, record_requests
 
-from . import cache, checkpoint, detail_failure_allowlist
+from . import cache, checkpoint, deferred_revisions, detail_failure_allowlist
 from .api_client import NoResultError, get_ordinance_detail, search_ordinances
 from .config import API_TYPES, CONCURRENT_WORKERS
 from .failures import append_failure
@@ -71,6 +71,7 @@ def fetch_all_current(
     date_range: str = "",
     history: bool = False,
     list_workers: int = 1,
+    check_quota: bool = False,
 ) -> list[dict]:
     """Fetch ordinance list pages and filter selected types client-side.
 
@@ -118,6 +119,9 @@ def fetch_all_current(
     total_pages = math.ceil(total / display)
     if total_pages <= 1:
         return entries
+
+    if check_quota:
+        ensure_headroom(expected_requests=total_pages - 1, corpus="ordinances")
 
     if list_workers > 1 and max_entries is None:
         pages = range(2, total_pages + 1)
@@ -189,15 +193,20 @@ def _fetch_detail_task(
     ordinance_mst: str,
     counter: Counter,
     quota: _QuotaBatch,
+    refresh_cached: bool = False,
 ) -> None:
     cache_key = str(ordinance_mst or ordinance_id)
-    if cache.get_detail(cache_key, historical=bool(ordinance_mst)) is not None:
-        counter.inc("cached")
-        return
+    refresh = ordinance_mst in deferred_revisions.load_entries()
+    if not refresh and cache.get_detail(cache_key, historical=bool(ordinance_mst)) is not None:
+        if not refresh_cached:
+            counter.inc("cached")
+            return
+        refresh = True
     try:
         get_ordinance_detail(
             ordinance_id,
             mst=ordinance_mst,
+            **({"refresh": True} if refresh else {}),
             on_request_attempt=quota.record_attempt,
         )
         # mark_detail_processed 를 부르지 않는다: 재개 판정은 cache.get_detail
@@ -206,7 +215,7 @@ def _fetch_detail_task(
         # 소비자도 없다.
         counter.inc("fetched")
     except NoResultError:
-        if ordinance_mst:
+        if ordinance_mst and not refresh:
             cache.add_no_result_serial(ordinance_mst)
             counter.inc("no_result")
             return
@@ -217,13 +226,14 @@ def _fetch_detail_task(
         if (
             isinstance(exc, requests.HTTPError)
             and ordinance_mst
+            and not refresh
             and exc.response is not None
             and exc.response.status_code == 404
         ):
             cache.add_no_result_serial(ordinance_mst)
             counter.inc("no_result")
             return
-        entry = detail_failure_allowlist.accepted_entry(ordinance_mst, exc)
+        entry = None if refresh else detail_failure_allowlist.accepted_entry(ordinance_mst, exc)
         if entry is not None:
             logger.warning(
                 "Known upstream ordinance detail failure MST=%s: %s [%s]",
@@ -238,7 +248,13 @@ def _fetch_detail_task(
         counter.inc("errors")
 
 
-def fetch_details(entries: list[dict], workers: int = CONCURRENT_WORKERS, limit: int | None = None) -> Counter:
+def fetch_details(
+    entries: list[dict],
+    workers: int = CONCURRENT_WORKERS,
+    limit: int | None = None,
+    *,
+    refresh_cached: bool = False,
+) -> Counter:
     ids = []
     seen = set()
     for entry in entries:
@@ -263,7 +279,7 @@ def fetch_details(entries: list[dict], workers: int = CONCURRENT_WORKERS, limit:
             ordinance_id, ordinance_mst = next(source)
         except StopIteration:
             return False
-        pending.add(pool.submit(_fetch_detail_task, ordinance_id, ordinance_mst, counter, quota))
+        pending.add(pool.submit(_fetch_detail_task, ordinance_id, ordinance_mst, counter, quota, refresh_cached))
         return True
 
     for _ in range(min(workers, len(ids))):
@@ -290,7 +306,7 @@ def fetch_details(entries: list[dict], workers: int = CONCURRENT_WORKERS, limit:
     return counter
 
 
-def missing_detail_entries(entries: list[dict]) -> list[dict]:
+def missing_detail_entries(entries: list[dict], *, retry_no_results: bool = False) -> list[dict]:
     missing = []
     no_result_serials = cache.load_no_result_serials()
     for entry in entries:
@@ -299,7 +315,7 @@ def missing_detail_entries(entries: list[dict]) -> list[dict]:
         cache_key = ordinance_mst or ordinance_id
         if ordinance_mst and detail_failure_allowlist.is_listed(ordinance_mst):
             continue
-        if ordinance_mst in no_result_serials:
+        if ordinance_mst in no_result_serials and not retry_no_results:
             continue
         if cache_key and cache.get_detail(cache_key, historical=bool(ordinance_mst)) is None:
             missing.append(entry)
@@ -326,7 +342,7 @@ def main() -> None:
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     if not args.skip_quota_check:
-        ensure_headroom(expected_requests=10000 if args.history else args.limit or 200000, corpus="ordinances")
+        ensure_headroom(expected_requests=0 if args.history and args.skip_list else 1, corpus="ordinances")
     if args.history and args.skip_list:
         entries = cache.get_history_entries()
         if not entries:
@@ -340,7 +356,8 @@ def main() -> None:
             display=args.display,
             max_entries=args.limit,
             history=args.history,
-            list_workers=args.workers if args.history else 1,
+            list_workers=args.workers,
+            check_quota=not args.skip_quota_check,
         )
         if args.history and args.limit is None and not args.org and not args.sborg and not args.types:
             cache.put_history_entries(entries)
@@ -350,7 +367,7 @@ def main() -> None:
         logger.info("ordinance history seed done: %s", seed_stats)
         if seed_stats["errors"]:
             raise SystemExit(f"ordinance history seed failed: errors={seed_stats['errors']}")
-    fetch_entries = missing_detail_entries(entries)
+    fetch_entries = missing_detail_entries(entries, retry_no_results=not args.history)
     missing_total = len(fetch_entries)
     if args.max_new_details is not None:
         fetch_entries = fetch_entries[:args.max_new_details]

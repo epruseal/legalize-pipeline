@@ -79,7 +79,7 @@ jobs:
             python -m ordinances.update --repo "$ORDINANCE_KR_REPO" --days 14 --commit
           fi
 
-      - name: Validate
+      - name: Validate Markdown after revision coverage passes
         working-directory: ${{ env.PIPELINE_REPO }}
         run: |
           . "$WORKSPACE_ROOT/.venv/bin/activate"

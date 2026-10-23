@@ -9,13 +9,29 @@ and the Rust `admrule-kr-compiler`.
   `{기관경로...}/{행정규칙종류}/{행정규칙명}/본문.md`.
 - Source collection uses `target=admrul` with `history=True` / `nw=2`, so
   `.cache/admrule/{행정규칙일련번호}.xml` contains history revisions, not only
-  the current list.
+  the current list. Withdrawn XML moves to `admrule/retired/` and remains compiler input.
+  Active XML takes precedence over archived XML with the same serial.
 - A rule's history identity is `행정규칙ID`. If that field is missing, fall
   back to `행정규칙일련번호`.
 - The final `HEAD` represents the current administrative-rule snapshot. A
-  revision whose `제개정구분` contains `폐지` deletes the latest path for that
+  revision with repeal code `200404` or `200410` deletes the latest path for that
   identity instead of writing a replacement Markdown file. The deleted content
-  remains in earlier Git commits.
+  remains in earlier Git commits. `200407` (`폐지제정`) writes the replacement body.
+- Full imports apply `current_snapshot.json` after the publication history.
+  The pipeline selects `nw=1` rows marked `현행`, excluding explicit repeals.
+  It also retains absent candidates after live detail confirmation of `현행여부=Y`.
+  The snapshot records these source discrepancies in `supplemental`.
+  Python and Rust restore the same selected paths and bytes.
+  YAML strings do not wrap at a fixed width. Strings with line breaks or control
+  characters use escaped double quotes, so attachment titles preserve their values.
+  `소관부처명_원문` follows `기관경로` in both implementations.
+  XML text preserves spaces across text, CDATA, and character references.
+  XML 1.0 line endings normalize to LF before rendering.
+  Numeric headings and item markers recognize Unicode decimal digits.
+  This selection overrides cached `현행여부` when choosing the final tree.
+  The raw XML and its rendered metadata remain unchanged.
+  Snapshot corrections use `observed_on` as their commit date.
+  Without this file, legacy cached-status selection remains available for old caches and test fixtures.
 - `기관경로` is based on normalized `상위부처명`, `소관부처명`, and
   `담당부서기관명`, then corrected with legal parent relationships from
   `정부조직법` and agency-specific installation laws. If the resolved agency has
@@ -118,3 +134,18 @@ and the Rust `admrule-kr-compiler`.
 - `수도권매립지관리공사의 설립 및 운영 등에 관한 법률` 제5조·제7조, `평생교육법` 제19조: 공공기관 위치 보정 근거.
 - `국가인권위원회법` 제3조 및 `고위공직자범죄수사처 설치 및 운영에 관한 법률` 제3조: 특정 상위기관에 편입하지 않는 독립기관 근거.
 - `10ㆍ29이태원참사 피해자 권리보장과 진상규명 및 재발방지를 위한 특별법` 제6조·제7조 및 `세월호 선체조사위원회의 설치 및 운영에 관한 특별법` 제3조·제4조·제9조: 특정 부처에 편입하지 않는 한시 조사위원회 근거.
+
+## Current body preservation
+
+`current_snapshot.json` can include `required_body_ids`, an array of selected rule IDs.
+Every listed ID must belong to `rules` and must retain source text or original document attachments.
+Python and Rust reject a missing body before a full import writes output.
+An absent field means an empty array for older snapshots.
+The field does not require text for rules that never supplied source text.
+The online pipeline rechecks changed cached documents against the live API before publication.
+The offline compiler enforces the recorded body requirement without making network requests.
+
+If inline text is absent, the converter preserves original `첨부파일명` and `첨부파일링크` pairs.
+It records these files as `원문첨부` and uses `본문출처: attachment-only`.
+The Markdown body links to these documents. A `별표` alone does not replace the original body.
+Both implementations accept original document attachments for `required_body_ids`.

@@ -43,14 +43,14 @@ def file_is_tracked(repo_dir: Path, file_path: Path) -> bool:
 
 
 def commit_exists(repo_dir: Path, grep_key: str) -> bool:
-    """Check if a commit containing an exact grep_key line already exists."""
+    """Check for an exact grep_key line in the current branch history."""
     try:
         pattern = f"^{re.escape(grep_key)}$"
         return bool(
             _run_git(
                 "log",
                 "--oneline",
-                "--all",
+                "HEAD",
                 "--extended-regexp",
                 f"--grep={pattern}",
                 cwd=repo_dir,
@@ -111,6 +111,7 @@ def commit_with_historical_date(
     author: str = BOT_AUTHOR,
     dedup_grep_key: str | None = None,
     allow_empty: bool = False,
+    preserve_message: bool = False,
 ) -> bool:
     """Stage and commit files with GIT_AUTHOR_DATE/GIT_COMMITTER_DATE set."""
     repo_dir = Path(repo_dir)
@@ -142,6 +143,7 @@ def commit_with_historical_date(
         env = historical_commit_env(date, author=author)
         _run_git(
             "commit",
+            *(["--cleanup=verbatim"] if preserve_message else []),
             "--allow-empty",
             "-m",
             message,
@@ -164,6 +166,7 @@ def commit_with_historical_date(
     env = historical_commit_env(date, author=author)
     _run_git(
         "commit",
+        *(["--cleanup=verbatim"] if preserve_message else []),
         "-m",
         message,
         "--author",

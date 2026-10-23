@@ -92,7 +92,7 @@ def search_ordinances(
     if ordinance_type:
         params["knd"] = TYPE_CODES.get(ordinance_type, ordinance_type)
     if date_range:
-        params["prmlYd"] = date_range
+        params["ancYd"] = date_range
 
     for attempt in range(MAX_RETRIES + 1):
         resp = _request(f"{LAW_API_BASE}/lawSearch.do", params)
@@ -155,7 +155,7 @@ def get_ordinance_detail(
         raise RuntimeError(
             f"ordin detail MST={mst} returned invalid 자치법규일련번호={actual_serial or '<missing>'}"
         )
-    if not mst and actual_id != str(ordinance_id):
+    if actual_id != str(ordinance_id):
         raise RuntimeError(
             f"ordin detail ID={ordinance_id} returned invalid 자치법규ID={actual_id or '<missing>'}"
         )

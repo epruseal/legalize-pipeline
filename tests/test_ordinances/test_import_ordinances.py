@@ -1,5 +1,7 @@
 """Tests for ordinances/import_ordinances.py."""
 
+import pytest
+
 from ordinances import import_ordinances
 from .test_converter import SAMPLE_XML
 
@@ -221,3 +223,36 @@ def test_import_from_cache_assigns_collision_paths_in_serial_order(tmp_path, mon
     assert counters["written"] == 2
     assert "자치법규ID: '1'" in clean_path.read_text(encoding="utf-8")
     assert "자치법규ID: '2'" in collision_path.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("selected", [False, True])
+@pytest.mark.parametrize("serial_tag", [
+    "<자치법규일련번호>99999</자치법규일련번호>",
+    "<자치법규일련번호/>",
+    "",
+])
+def test_history_key_mismatch_rejects_revision_and_keeps_valid_sibling(tmp_path, monkeypatch, selected, serial_tag):
+    from ordinances import cache
+
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path / "cache")
+    monkeypatch.setattr(cache, "HISTORY_DIR", tmp_path / "cache/history")
+    bad = SAMPLE_XML.replace("<자치법규일련번호>12345</자치법규일련번호>", serial_tag)
+    cache.put_detail("12345", bad.encode(), historical=True)
+    good = SAMPLE_XML.replace("12345", "12346").replace("2000111", "2000112")
+    cache.put_detail("12346", good.encode(), historical=True)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    sentinel = repo / "published.md"
+    sentinel.write_text("Existing publication")
+
+    counters = import_ordinances.import_from_cache(
+        repo, serials=["12346", "12345"] if selected else None,
+    )
+
+    assert counters["errors"] == 1
+    assert counters["written"] == 1
+    assert counters["committed"] == 0
+    assert sentinel.read_text() == "Existing publication"
+    publications = list(repo.rglob("본문.md"))
+    assert len(publications) == 1
+    assert "자치법규일련번호: '12346'" in publications[0].read_text()

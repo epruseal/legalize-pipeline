@@ -55,7 +55,8 @@ def test_search_ordinances_parses_list(monkeypatch):
 def test_search_ordinances_sends_date_range(monkeypatch):
     def fake_request(url, params, *, on_attempt=None):
         assert on_attempt is None
-        assert params["prmlYd"] == "20260501~20260511"
+        assert params["ancYd"] == "20260501~20260511"
+        assert "prmlYd" not in params
         return Response(b"<LawSearch><totalCnt>0</totalCnt><page>1</page></LawSearch>")
 
     monkeypatch.setattr(api_client, "_request", fake_request)

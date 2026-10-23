@@ -1,6 +1,7 @@
 """Import cached ordinance XML into an ordinance-kr working tree."""
 
 import argparse
+import datetime
 import logging
 from pathlib import Path
 
@@ -10,8 +11,8 @@ from core.atomic_io import atomic_write_text
 
 from . import cache
 from .config import ORDINANCE_REPO
-from .converter import UnsupportedOrdinanceType, format_date, parse_ordinance_xml, reset_path_registry, xml_to_markdown
-from .git_engine import commit_ordinance, commit_ordinance_deletion
+from .converter import UnsupportedOrdinanceType, format_date, parse_ordinance_xml, reset_path_registry, source_fields_to_markdown, xml_to_markdown
+from .git_engine import commit_ordinance, commit_ordinance_deletion, committed_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -45,9 +46,16 @@ def cached_entries(limit: int | None = None, serials: list[str] | None = None) -
     ]
 
 
+def _revision_date(metadata: dict) -> str:
+    try:
+        return datetime.date.fromisoformat(format_date(metadata.get("공포일자", ""))).isoformat()
+    except ValueError:
+        return "1970-01-01"
+
+
 def _sort_key(entry: dict) -> tuple[str, int, str]:
     metadata = entry["metadata"]
-    date = format_date(metadata.get("공포일자", "")) or "1970-01-01"
+    date = _revision_date(metadata)
     serial = str(metadata.get("자치법규일련번호", ""))
     try:
         serial_key = int(serial)
@@ -112,6 +120,14 @@ def import_from_cache(
             continue
         try:
             detail = parse_ordinance_xml(raw)
+            if serials is not None or cache_key.startswith("history/"):
+                expected_serial = cache_key.removeprefix("history/")
+                actual_serial = str(detail["metadata"].get("자치법규일련번호", ""))
+                if actual_serial != expected_serial:
+                    raise ValueError(
+                        f"history cache key {expected_serial} returned invalid "
+                        f"자치법규일련번호={actual_serial or '<missing>'}"
+                    )
             serial = str(detail["metadata"].get("자치법규일련번호") or cache_key)
             ordinance_id = str(detail["metadata"].get("자치법규ID") or cache_key)
             candidate = {
@@ -122,6 +138,8 @@ def import_from_cache(
                 "identity": ordinance_id,
                 "metadata": detail["metadata"],
                 "repeal": _is_repeal_revision(detail["metadata"]),
+                "repeal_source": source_fields_to_markdown(detail)
+                if _is_repeal_revision(detail["metadata"]) and detail["source_errors"] else "",
                 "priority": int(cache_key.removeprefix("history/") == serial),
             }
             previous = candidates.get(serial)
@@ -137,6 +155,8 @@ def import_from_cache(
             logger.exception("Failed parsing ordinance cache_key=%s", cache_key)
             counters["errors"] += 1
 
+    latest_paths = _current_paths_by_identity(repo_dir) if commit and candidates else {}
+    reset_path_registry({path: identity for identity, path in latest_paths.items()})
     entries = []
     for serial in sorted(candidates):
         candidate = candidates[serial]
@@ -154,25 +174,37 @@ def import_from_cache(
     if not entries:
         return counters
 
-    latest_paths: dict[str, str] = _current_paths_by_identity(repo_dir) if commit else {}
+    committed_serials = committed_metadata(repo_dir)[0] if commit and not skip_dedup else set()
     for entry in sorted(entries, key=_sort_key):
         try:
+            if entry["serial"] in committed_serials:
+                counters["skipped"] += 1
+                continue
             meta = entry["metadata"]
             rel_path = entry["rel_path"]
+            previous_path = latest_paths.get(entry["identity"])
+            if commit and previous_path:
+                current = _frontmatter_from_markdown(repo_dir / previous_path)
+                if _sort_key({"metadata": current, "rel_path": previous_path}) > _sort_key(entry):
+                    raise ValueError(
+                        f"Older revision {entry['serial']} would replace a newer ordinance; "
+                        "rebuild its history in an isolated repository before publication"
+                    )
             if entry["repeal"]:
                 previous_path = latest_paths.pop(entry["identity"], None)
                 deleted_path = previous_path if previous_path and _remove_stale_path(repo_dir, previous_path) else None
                 if deleted_path:
                     counters["deleted"] += 1
                 if commit:
-                    date = format_date(meta.get("공포일자", "")) or "2000-01-01"
+                    date = _revision_date(meta)
                     if commit_ordinance_deletion(
                         repo_dir,
                         deleted_path,
-                        build_commit_msg(meta),
+                        build_commit_msg(meta) + ("\n\n" + entry["repeal_source"] if entry["repeal_source"] else ""),
                         date,
                         entry["serial"],
                         skip_dedup=skip_dedup,
+                        preserve_message=bool(entry["repeal_source"]),
                     ):
                         counters["committed"] += 1
                 continue
@@ -187,7 +219,7 @@ def import_from_cache(
             atomic_write_text(target, entry["markdown"])
             counters["written"] += 1
             if commit:
-                date = format_date(meta.get("공포일자", "")) or "2000-01-01"
+                date = _revision_date(meta)
                 if commit_ordinance(
                     repo_dir,
                     rel_path,
@@ -212,7 +244,10 @@ def main() -> None:
     parser.add_argument("--commit", action="store_true")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    logger.info("ordinance import done: %s", import_from_cache(args.repo, limit=args.limit, commit=args.commit))
+    stats = import_from_cache(args.repo, limit=args.limit, commit=args.commit)
+    logger.info("ordinance import done: %s", stats)
+    if stats["errors"]:
+        raise SystemExit(f"Ordinance import failed: errors={stats['errors']}")
 
 
 if __name__ == "__main__":

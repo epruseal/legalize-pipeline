@@ -248,6 +248,31 @@ def test_fetch_details_accepts_allowlisted_http_error(monkeypatch):
     assert failures == []
 
 
+def test_cached_refresh_does_not_accept_allowlisted_fetch_failure(monkeypatch):
+    failures = []
+
+    def raise_500(ordinance_id, mst="", refresh=False, on_request_attempt=None):
+        assert refresh is True
+        on_request_attempt()
+        response = requests.Response()
+        response.status_code = 500
+        raise requests.HTTPError("500 Server Error: Internal Server Error", response=response)
+
+    monkeypatch.setattr(fetch_cache.cache, "get_detail", lambda cache_key, **kwargs: b"previous snapshot")
+    monkeypatch.setattr(fetch_cache, "get_ordinance_detail", raise_500)
+    monkeypatch.setattr(fetch_cache, "append_failure", lambda row: failures.append(row))
+    monkeypatch.setattr(fetch_cache, "record_requests", lambda count, corpus: None)
+
+    counter = fetch_cache.fetch_details(
+        [{"자치법규ID": "2050384", "자치법규일련번호": "899529"}],
+        workers=1,
+        refresh_cached=True,
+    )
+
+    assert counter.snapshot_all() == {"cached": 0, "fetched": 0, "errors": 1}
+    assert len(failures) == 1
+
+
 def test_fetch_details_records_history_no_result_xml(monkeypatch):
     no_results = []
 
@@ -300,6 +325,8 @@ def test_missing_detail_entries_skips_negative_cache(monkeypatch):
 
     assert fetch_cache.missing_detail_entries(entries) == [entries[1]]
 
+    assert fetch_cache.missing_detail_entries(entries, retry_no_results=True) == entries
+
 
 def test_main_exits_when_detail_fetch_has_errors(monkeypatch):
     counter = Counter()
@@ -309,7 +336,7 @@ def test_main_exits_when_detail_fetch_has_errors(monkeypatch):
     monkeypatch.setattr(
         fetch_cache,
         "fetch_all_current",
-        lambda types, org="", sborg="", display=100, max_entries=None, history=False, list_workers=1: [],
+        lambda types, org="", sborg="", display=100, max_entries=None, history=False, list_workers=1, check_quota=False: [],
     )
     monkeypatch.setattr(fetch_cache, "fetch_details", lambda entries, workers, limit: counter)
 
@@ -329,9 +356,9 @@ def test_main_recovers_failed_details_after_batch(monkeypatch):
     monkeypatch.setattr(
         fetch_cache,
         "fetch_all_current",
-        lambda types, org="", sborg="", display=100, max_entries=None, history=False, list_workers=1: [entry],
+        lambda types, org="", sborg="", display=100, max_entries=None, history=False, list_workers=1, check_quota=False: [entry],
     )
-    monkeypatch.setattr(fetch_cache, "missing_detail_entries", lambda entries: list(entries))
+    monkeypatch.setattr(fetch_cache, "missing_detail_entries", lambda entries, **kwargs: list(entries))
 
     def fake_fetch_details(entries, workers, limit):
         fetch_calls.append(list(entries))
@@ -354,9 +381,9 @@ def test_main_exits_when_recovery_pass_still_has_errors(monkeypatch):
     monkeypatch.setattr(
         fetch_cache,
         "fetch_all_current",
-        lambda types, org="", sborg="", display=100, max_entries=None, history=False, list_workers=1: [entry],
+        lambda types, org="", sborg="", display=100, max_entries=None, history=False, list_workers=1, check_quota=False: [entry],
     )
-    monkeypatch.setattr(fetch_cache, "missing_detail_entries", lambda entries: list(entries))
+    monkeypatch.setattr(fetch_cache, "missing_detail_entries", lambda entries, **kwargs: list(entries))
 
     def fake_fetch_details(entries, workers, limit):
         fetch_calls.append(list(entries))
@@ -368,3 +395,34 @@ def test_main_exits_when_recovery_pass_still_has_errors(monkeypatch):
         fetch_cache.main()
 
     assert fetch_calls == [[entry], [entry]]
+
+
+def test_current_refresh_budgets_pages_and_only_missing_details(monkeypatch):
+    budgets = []
+    entry = {"자치법규ID": "1", "자치법규일련번호": "1", "자치법규종류": "조례"}
+    monkeypatch.setattr(sys, "argv", ["ordinances.fetch_cache"])
+    monkeypatch.setattr(fetch_cache, "ensure_headroom", lambda expected_requests, corpus: budgets.append(expected_requests))
+    monkeypatch.setattr(fetch_cache, "record_requests", lambda *args, **kwargs: None)
+    monkeypatch.setattr(fetch_cache, "search_ordinances", lambda **kwargs: {
+        "totalCnt": 101, "ordinances": [entry] if kwargs["page"] == 1 else [],
+    })
+    monkeypatch.setattr(fetch_cache.cache, "get_detail", lambda *args, **kwargs: b"cached")
+    monkeypatch.setattr(fetch_cache.cache, "load_no_result_serials", lambda: set())
+    monkeypatch.setattr(fetch_cache, "fetch_details", lambda entries, **kwargs: Counter())
+    fetch_cache.main()
+    assert budgets == [1, 1, 0]
+
+
+def test_listing_quota_failure_stops_before_remaining_pages(monkeypatch):
+    calls = []
+    monkeypatch.setattr(fetch_cache, "record_requests", lambda *args, **kwargs: None)
+    def search(**kwargs):
+        calls.append(kwargs["page"])
+        return {"totalCnt": 101, "ordinances": []}
+    def no_budget(**kwargs):
+        raise RuntimeError("quota guardrail")
+    monkeypatch.setattr(fetch_cache, "search_ordinances", search)
+    monkeypatch.setattr(fetch_cache, "ensure_headroom", no_budget)
+    with pytest.raises(RuntimeError, match="quota guardrail"):
+        fetch_cache.fetch_all_current(check_quota=True, list_workers=2)
+    assert calls == [1]

@@ -51,6 +51,11 @@ def _quote_yaml_strings(value):
 
 
 CODE_TO_TYPE = {code: label for label, code in TYPE_CODES.items()}
+SOURCE_WARNING = "원천 XML의 조문 구조에 오류가 있습니다. 아래는 원문 필드와 텍스트를 등장 순서대로 보존한 내용입니다. 조문 번호나 항의 소속을 수정하지 않았습니다."
+SOURCE_TEXT_TAGS = {
+    "조문번호", "조문가지번호", "조문여부", "조문제목", "조제목",
+    "조문내용", "조내용", "부칙공포일자", "부칙공포번호", "부칙내용",
+}
 _INVALID_PATH_CHARS_RE = re.compile(r"[\x00-\x1f\\/:\0\"'<>|?*]")
 _WINDOWS_RESERVED_NAMES = {
     "CON",
@@ -183,8 +188,9 @@ def _split_jurisdiction_for_output(value: str) -> tuple[str, str]:
 _assigned_paths: dict[str, str] = {}
 
 
-def reset_path_registry() -> None:
+def reset_path_registry(existing_paths: dict[str, str] | None = None) -> None:
     _assigned_paths.clear()
+    _assigned_paths.update(existing_paths or {})
 
 
 def build_source_url(ordinance_id: str, name: str) -> str:
@@ -259,16 +265,30 @@ def parse_ordinance_xml(raw_xml: bytes | str) -> dict:
         "담당부서": normalize_text(_text(root, ".//담당부서명")),
     }
     articles = []
+    source_errors = []
+    seen_articles = set()
     for jo in (node for node in root.iter() if node.tag in {"조문단위", "조"}):
         number, branch_number = _split_article_number(
             jo.findtext("조문번호", ""), jo.findtext("조문가지번호", "")
         )
+        kind = _normalize_article_kind(jo.findtext("조문여부", ""))
+        content = jo.findtext("조문내용", "") or jo.findtext("조내용", "")
+        label = f"제{number}조" + (f"의{branch_number}" if branch_number else "")
+        if kind != "전문" and content.strip().startswith(label):
+            remainder = content.strip()[len(label):].lstrip()
+            if remainder.startswith(label):
+                source_errors.append(f"repeated ordinance article heading {label}")
+        key = (number, branch_number)
+        if kind != "전문" and number not in {"", "0"}:
+            if key in seen_articles:
+                source_errors.append(f"duplicate ordinance article {number} {branch_number}".rstrip())
+            seen_articles.add(key)
         articles.append({
             "조문번호": number,
             "조문가지번호": branch_number,
-            "조문여부": _normalize_article_kind(jo.findtext("조문여부", "")),
+            "조문여부": kind,
             "조문제목": jo.findtext("조문제목", "") or jo.findtext("조제목", ""),
-            "조문내용": jo.findtext("조문내용", "") or jo.findtext("조내용", ""),
+            "조문내용": content,
             "항": [],
         })
     return {
@@ -277,6 +297,11 @@ def parse_ordinance_xml(raw_xml: bytes | str) -> dict:
         "addenda": _addenda_nodes(root),
         "attachments": _attachment_nodes(root),
         "raw_xml": raw_xml,
+        "source_errors": source_errors,
+        "source_fields": [
+            (node.tag, "".join(node.itertext())) for node in root.iter()
+            if node.tag in SOURCE_TEXT_TAGS
+        ] if source_errors else [],
     }
 
 
@@ -344,6 +369,14 @@ def compute_path(metadata: dict, *, use_registry: bool = False) -> str:
         idx += 1
 
 
+def source_fields_to_markdown(detail: dict) -> str:
+    parts = [f"> {SOURCE_WARNING}\n"]
+    for tag, text in detail["source_fields"]:
+        fence = "`" * max(3, 1 + max((len(run) for run in re.findall(r"`+", text)), default=0))
+        parts.append(f"{tag}\n\n{fence}text\n{text}\n{fence}\n")
+    return "\n".join(parts).rstrip()
+
+
 def ordinance_to_markdown(detail: dict) -> str:
     metadata = detail["metadata"]
     articles_md = articles_to_markdown(detail.get("articles", []))
@@ -353,6 +386,9 @@ def ordinance_to_markdown(detail: dict) -> str:
     else:
         metadata["body_source"] = "parsing-failed"
     fm = build_frontmatter(metadata, detail.get("attachments", []))
+    source_errors = detail.get("source_errors", [])
+    if source_errors:
+        fm["원문오류"] = source_errors
     yaml_str = yaml.dump(
         _quote_yaml_strings(fm),
         Dumper=_OrdinanceDumper,
@@ -362,6 +398,9 @@ def ordinance_to_markdown(detail: dict) -> str:
     )
     name = metadata.get("자치법규명", "")
     body_parts = [f"# {name}", ""]
+    if source_errors:
+        body_parts.append(source_fields_to_markdown(detail))
+        return f"---\n{yaml_str}---\n\n" + "\n".join(body_parts).rstrip() + "\n"
     if articles_md.strip():
         body_parts.append(articles_md)
     for item in detail.get("addenda", []):

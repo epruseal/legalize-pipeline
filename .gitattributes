@@ -1,0 +1,2 @@
+# Preserve the exact bytes used by upstream response fingerprints.
+tests/fixtures/ordinances/upstream-*.xml -text

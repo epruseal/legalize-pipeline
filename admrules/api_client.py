@@ -23,6 +23,10 @@ logger = logging.getLogger(__name__)
 _throttle = Throttle(REQUEST_DELAY_SECONDS)
 
 
+class NoResultError(RuntimeError):
+    """Raised when the detail endpoint explicitly reports no matching rule."""
+
+
 def _request(url: str, params: dict) -> requests.Response:
     return make_request(
         url,
@@ -41,6 +45,8 @@ def _require_no_api_error(root: ElementTree.Element, context: str) -> None:
 
 
 def _require_admrule_detail_root(root: ElementTree.Element, serial_no: str) -> None:
+    if root.tag == "Law" and "일치하는 행정규칙이 없습니다" in "".join(root.itertext()):
+        raise NoResultError(f"no admrule detail for ID={serial_no}")
     if root.tag != "AdmRulService":
         raise RuntimeError(f"unexpected admrule detail root tag for ID={serial_no}: {root.tag}")
 
@@ -79,6 +85,11 @@ def search_admrules(
     root, _raw = parse_xml(resp.content, context=f"admrul search page {page}")
     _require_no_api_error(root, f"admrul search page {page}")
 
+    if root.tag != "AdmRulSearch" or root.findtext("totalCnt") is None:
+        raise RuntimeError(f"Unexpected admrule search response: {root.tag}")
+    if int(root.findtext("page", "0")) != page:
+        raise RuntimeError(f"Unexpected admrule search page: requested={page}")
+
     admrules = []
     for item in root.findall(".//admrul"):
         admrules.append({
@@ -104,11 +115,11 @@ def search_admrules(
     }
 
 
-def get_admrule_detail(serial_no: str | int) -> bytes:
+def get_admrule_detail(serial_no: str | int, *, refresh: bool = False) -> bytes:
     """Fetch raw administrative rule detail XML by 행정규칙일련번호."""
     serial_no = str(serial_no)
     cached = cache.get_detail(serial_no)
-    if cached:
+    if cached and not refresh:
         logger.debug("Cache hit: admrule detail serial_no=%s", serial_no)
         return cached
 
@@ -119,8 +130,11 @@ def get_admrule_detail(serial_no: str | int) -> bytes:
     })
     raw = resp.content
     root, raw = parse_xml(raw, context=f"admrul detail ID={serial_no}")
-    _require_admrule_detail_root(root, serial_no)
     _require_no_api_error(root, f"admrul detail ID={serial_no}")
+    _require_admrule_detail_root(root, serial_no)
+    returned_serial = root.findtext(".//행정규칙일련번호") or root.findtext(".//ID")
+    if returned_serial != serial_no:
+        raise RuntimeError(f"admrule detail serial mismatch: requested={serial_no} returned={returned_serial}")
     cache.put_detail(serial_no, raw)
     return raw
 
