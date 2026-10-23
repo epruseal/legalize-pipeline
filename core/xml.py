@@ -1,11 +1,13 @@
 """상류 XML 응답을 위한 작은 복구 도우미."""
 
 import logging
+import re
 from xml.etree import ElementTree
 
 logger = logging.getLogger(__name__)
 
 _VALID_ENTITY_PREFIXES = ("amp;", "lt;", "gt;", "apos;", "quot;")
+_XML_DECLARATION = re.compile(r"(﻿?<\?xml\s+[^>]*?\bencoding\s*=\s*[\"'])[^\"']+([\"'][^>]*\?>)", re.IGNORECASE)
 
 
 def _find_protected_end(text: str, start: int, prefix: str, suffix: str) -> int | None:
@@ -51,10 +53,14 @@ def _escape_entities(text: str) -> str:
     return "".join(result)
 
 
+def _normalize_string_bytes(text: str) -> bytes:
+    return _XML_DECLARATION.sub(r"\1UTF-8\2", text, count=1).encode("utf-8")
+
+
 def repair_undefined_entities(raw: bytes | str) -> bytes:
     """보호 구간을 보존하고 일반 XML 구간의 미정의 엔티티를 이스케이프한다."""
     if isinstance(raw, str):
-        raw = raw.encode("utf-8")
+        raw = _normalize_string_bytes(raw)
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError:
@@ -91,7 +97,17 @@ def repair_undefined_entities(raw: bytes | str) -> bytes:
 def parse_xml(raw: bytes | str, *, context: str = "XML") -> tuple[ElementTree.Element, bytes]:
     """XML을 읽고 미정의 엔티티를 복구한 바이트를 함께 반환한다."""
     if isinstance(raw, str):
-        raw = raw.encode("utf-8")
+        try:
+            root = ElementTree.fromstring(raw)
+        except ElementTree.ParseError as error:
+            repaired = repair_undefined_entities(raw)
+            try:
+                root = ElementTree.fromstring(repaired)
+            except ElementTree.ParseError:
+                raise error
+            logger.warning("Repaired undefined XML entity in %s", context)
+            return root, repaired
+        return root, _normalize_string_bytes(raw)
     try:
         return ElementTree.fromstring(raw), raw
     except ElementTree.ParseError as error:
