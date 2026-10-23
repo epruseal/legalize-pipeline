@@ -32,6 +32,7 @@ def commit_ordinance_deletion(
     serial_no: str,
     *,
     skip_dedup: bool = False,
+    preserve_message: bool = False,
 ) -> bool:
     key = None if skip_dedup else f"자치법규일련번호: {serial_no}"
     return commit_with_historical_date(
@@ -42,6 +43,7 @@ def commit_ordinance_deletion(
         author=BOT_AUTHOR,
         dedup_grep_key=key,
         allow_empty=file_path is None,
+        preserve_message=preserve_message,
     )
 
 

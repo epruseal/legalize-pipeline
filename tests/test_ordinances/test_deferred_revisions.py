@@ -1,4 +1,4 @@
-"""Reviewed source defects must not block unrelated daily revisions."""
+"""Previously deferred sources are published without changing their text."""
 
 import subprocess
 import sys
@@ -74,92 +74,69 @@ def prepare(tmp_path, monkeypatch):
     return repo, raws, rows, old, requests
 
 
-def test_daily_update_defers_reviewed_sources_and_preserves_publications(tmp_path, monkeypatch):
+def test_daily_update_preserves_source_defects_and_previous_history(tmp_path, monkeypatch):
     repo, raws, rows, old, requests = prepare(tmp_path, monkeypatch)
+    before = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
     monkeypatch.setattr(sys, "argv", ["ordinances.update", "--repo", str(repo), "--workers", "1", "--commit"])
-    summary = tmp_path / "summary.md"
-    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
-
     update.main()
-
-    assert all(path.read_bytes() == content for path, content in old.items())
     assert all(cache.get_detail(serial, historical=True) == raw for serial, raw in raws.items())
-    committed = update._committed_metadata(repo)[0]
-    assert "12345" in committed
-    assert not committed.intersection(raws)
-    assert set(requests) == set(raws) | {"12345"}
-    assert all(serial in summary.read_text() for serial in raws)
+    assert set(raws) | {"12345"} <= update._committed_metadata(repo)[0]
+    for path, content in old.items():
+        assert subprocess.check_output(["git", "-C", str(repo), "show", f"{before}:{path.relative_to(repo)}"]) == content
+    documents = list(repo.rglob("본문.md"))
+    assert sum("원문오류:" in path.read_text() for path in documents) == len(raws)
     head = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"])
     repeat = update.run(repo=repo, workers=1, commit=True)
-    assert repeat["errors"] == repeat["missing"] == repeat["committed"] == 0
-    assert repeat["deferred"] == len(raws)
+    assert repeat["errors"] == repeat["missing"] == repeat["committed"] == repeat["deferred"] == 0
     assert subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"]) == head
 
 
 @pytest.mark.parametrize("serial, original", [("2178401", "디자인클리닉"), ("2178653", "지급구분")])
-def test_changed_invalid_source_still_blocks_publication(tmp_path, monkeypatch, serial, original):
+def test_changed_defective_source_preserves_new_text(tmp_path, monkeypatch, serial, original):
     repo, raws, rows, old, requests = prepare(tmp_path, monkeypatch)
     raws[serial] = raws[serial].replace(original.encode(), "변경된 내용".encode())
-    monkeypatch.setattr(sys, "argv", ["ordinances.update", "--repo", str(repo), "--workers", "1", "--commit"])
-
-    with pytest.raises(SystemExit, match="errors=1, missing=1"):
-        update.main()
-
-    assert all(path.read_bytes() == content for path, content in old.items())
+    stats = update.run(repo=repo, workers=1, commit=True)
+    assert stats["errors"] == stats["missing"] == stats["deferred"] == 0
+    assert serial in update._committed_metadata(repo)[0]
+    assert any("변경된 내용" in path.read_text() and "원문오류:" in path.read_text() for path in repo.rglob("본문.md"))
 
 
-def test_daily_update_accepts_rotated_attachment_locators(tmp_path, monkeypatch):
+def test_daily_update_preserves_rotated_attachment_locators(tmp_path, monkeypatch):
     repo, raws, rows, old, requests = prepare(tmp_path, monkeypatch)
     raws["2178653"] = (FIXTURES / "upstream-2178653-20261023.xml").read_bytes()
-    monkeypatch.setattr(sys, "argv", ["ordinances.update", "--repo", str(repo), "--workers", "1", "--commit"])
-
-    update.main()
-
-    assert all(path.read_bytes() == content for path, content in old.items())
+    stats = update.run(repo=repo, workers=1, commit=True)
+    assert stats["errors"] == stats["missing"] == stats["deferred"] == 0
     assert cache.get_detail("2178653", historical=True) == raws["2178653"]
-    assert "12345" in update._committed_metadata(repo)[0]
-    assert "2178653" not in update._committed_metadata(repo)[0]
+    assert "2178653" in update._committed_metadata(repo)[0]
 
 
-def test_corrected_source_is_retried_outside_lookback_and_imported(tmp_path, monkeypatch):
+def test_corrected_source_is_imported_without_error_marker(tmp_path, monkeypatch):
     repo, raws, rows, old, requests = prepare(tmp_path, monkeypatch)
-    assert update.run(repo=repo, workers=1, commit=True)["deferred"] == len(raws)
     root = ElementTree.fromstring(raws["2178401"])
-    # Simulate an upstream correction. Production code does not edit the XML.
     for parent in root.iter():
         for node in list(parent):
             if node.tag == "조" and node.findtext("조내용", "").startswith("제8조 삭제"):
                 parent.remove(node)
     raws["2178401"] = ElementTree.tostring(root, encoding="utf-8")
-    parse_ordinance_xml(raws["2178401"])
+    assert not parse_ordinance_xml(raws["2178401"])["source_errors"]
     rows.clear()
-    monkeypatch.setattr(update, "_date_range", lambda days: "20261027~20261030")
-    before = len(requests)
-
-    recovered = update.run(repo=repo, workers=1, commit=True)
-
-    assert recovered["errors"] == recovered["missing"] == 0
-    assert recovered["committed"] == 1
-    assert recovered["deferred"] == len(raws) - 1
-    assert set(requests[before:]) == set(raws)
+    stats = update.run(repo=repo, workers=1, commit=True)
+    assert stats["errors"] == stats["missing"] == stats["deferred"] == 0
     assert "2178401" in update._committed_metadata(repo)[0]
-    before = len(requests)
-    assert update.run(repo=repo, workers=1, commit=True)["committed"] == 0
-    assert set(requests[before:]) == set(raws) - {"2178401"}
+    assert sum("원문오류:" in path.read_text() for path in repo.rglob("본문.md")) == len(raws) - 1
 
 
 @pytest.mark.parametrize("serial", REVIEWED_SOURCES)
 def test_review_requires_exact_source_error_and_unexpired_fingerprint(serial):
     raw = REVIEWED_SOURCES[serial].read_bytes()
-    with pytest.raises(ValueError) as caught:
-        parse_ordinance_xml(raw)
+    error = ValueError(parse_ordinance_xml(raw)["source_errors"][0])
     today = date(2026, 10, 18)
-    assert deferred_revisions.accepted_entry(serial, raw, caught.value, today) is not None
-    assert deferred_revisions.accepted_entry("unknown", raw, caught.value, today) is None
+    assert deferred_revisions.accepted_entry(serial, raw, error, today) is not None
+    assert deferred_revisions.accepted_entry("unknown", raw, error, today) is None
     if serial != "2178653":
-        assert deferred_revisions.accepted_entry(serial, raw + b"\n", caught.value, today) is None
+        assert deferred_revisions.accepted_entry(serial, raw + b"\n", error, today) is None
     assert deferred_revisions.accepted_entry(serial, raw, ValueError("different defect"), today) is None
-    assert deferred_revisions.accepted_entry(serial, raw, caught.value, date(2026, 10, 31)) is None
+    assert deferred_revisions.accepted_entry(serial, raw, error, date(2026, 10, 31)) is None
 
 
 def test_reviewed_attachment_locator_changes_keep_the_same_fingerprint():
@@ -177,11 +154,10 @@ def test_reviewed_attachment_locator_changes_keep_the_same_fingerprint():
     latest = (FIXTURES / "upstream-2178653-20261023.xml").read_bytes()
     assert deferred_revisions.attachment_locator_fingerprint(current) == deferred_revisions.attachment_locator_fingerprint(latest)
     for raw in [current, previous, latest]:
-        with pytest.raises(ValueError, match="duplicate ordinance article 1") as caught:
-            parse_ordinance_xml(raw)
-        entry = deferred_revisions.accepted_entry("2178653", raw, caught.value, date(2026, 10, 18))
+        error = ValueError(parse_ordinance_xml(raw)["source_errors"][0])
+        entry = deferred_revisions.accepted_entry("2178653", raw, error, date(2026, 10, 18))
         assert entry is not None
-        assert deferred_revisions.accepted_entry("2178653", raw, caught.value, date(2026, 10, 31)) is None
+        assert deferred_revisions.accepted_entry("2178653", raw, error, date(2026, 10, 31)) is None
         assert deferred_revisions.accepted_entry("2178653", raw, ValueError("different defect"), date(2026, 10, 23)) is None
 
 
@@ -288,8 +264,8 @@ def test_unreviewed_duplicate_is_not_deferred(tmp_path, monkeypatch):
     cache.put_detail("99999", unknown, historical=True)
     rows.append({"자치법규ID": "99999", "자치법규일련번호": "99999", "공포일자": "20261017"})
     stats = update.run(repo=repo, workers=1, commit=True)
-    assert stats["errors"] == stats["missing"] == 1
-    assert stats["deferred"] == len(raws)
+    assert stats["errors"] == stats["missing"] == stats["deferred"] == 0
+    assert "99999" in update._committed_metadata(repo)[0]
 
 
 def test_filtered_probe_does_not_fetch_unselected_reviewed_revisions(tmp_path, monkeypatch):
@@ -304,11 +280,11 @@ def test_reviewed_history_is_retried_even_when_present_outside_date_window(tmp_p
     repo, raws, rows, old, requests = prepare(tmp_path, monkeypatch)
     monkeypatch.setattr(update, "_date_range", lambda days: "20261027~20261030")
     stats = update.run(repo=repo, workers=1, commit=True)
-    assert stats["deferred"] == len(raws)
+    assert stats["deferred"] == 0
     assert set(requests) == set(raws) | {"12345"}
 
 
-def test_expired_review_still_blocks_even_without_new_search_results(tmp_path, monkeypatch):
+def test_expired_deferral_does_not_block_source_preservation(tmp_path, monkeypatch):
     repo, raws, rows, old, requests = prepare(tmp_path, monkeypatch)
     rows.clear()
 
@@ -319,16 +295,17 @@ def test_expired_review_still_blocks_even_without_new_search_results(tmp_path, m
 
     monkeypatch.setattr(deferred_revisions, "date", ExpiredDate)
     stats = update.run(repo=repo, workers=1, commit=True)
-    assert stats["deferred"] == stats["committed"] == 0
-    assert stats["errors"] == stats["missing"] == len(raws)
+    assert stats["deferred"] == stats["errors"] == stats["missing"] == 0
+    assert stats["committed"] == len(raws)
     assert set(requests) == set(raws)
 
 
-def test_preview_keeps_strict_validation(tmp_path, monkeypatch):
+def test_preview_preserves_source_errors(tmp_path, monkeypatch):
     repo, raws, rows, old, requests = prepare(tmp_path, monkeypatch)
     stats = update.run(repo=repo, workers=1)
     assert stats["deferred"] == 0
-    assert stats["errors"] == len(raws)
+    assert stats["errors"] == 0
+    assert stats["written"] == len(raws) + 1
 
 
 def test_corrected_reviewed_revision_must_keep_its_identity(tmp_path, monkeypatch):
@@ -363,7 +340,6 @@ def test_all_known_source_defects_are_retried_after_the_search_window(tmp_path, 
     stats = update.run(repo=repo, workers=1, commit=True)
 
     assert set(requests_seen) == set(REVIEWED_SOURCES)
-    assert stats["fetched"] == stats["deferred"] == len(REVIEWED_SOURCES)
-    assert stats["errors"] == stats["missing"] == stats["committed"] == 0
-    assert all(path.read_bytes() == content for path, content in old.items())
-    assert subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"]) == before
+    assert stats["fetched"] == stats["committed"] == len(REVIEWED_SOURCES)
+    assert stats["errors"] == stats["missing"] == stats["deferred"] == 0
+    assert subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"]) != before

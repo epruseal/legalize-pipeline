@@ -7,7 +7,7 @@ from pathlib import Path
 import yaml
 
 from .config import STORAGE_TYPES
-from .converter import safe_path_part
+from .converter import SOURCE_WARNING, safe_path_part
 from .jurisdictions import GWANGYEOK
 
 UNKNOWN_GWANGYEOK = "_미상"
@@ -43,6 +43,16 @@ def validate_markdown_file(path: Path, *, repo_root: Path) -> list[str]:
     body_source = fm.get("본문출처", fm.get("body_source"))
     if body_source not in {"api-text", "parsed-from-hwp", "parsing-failed"}:
         errors.append(f"invalid 본문출처: {rel}")
+    source_errors = fm.get("원문오류")
+    if source_errors is not None:
+        if not isinstance(source_errors, list) or not source_errors or not all(
+            isinstance(error, str) and error.startswith((
+                "duplicate ordinance article ", "repeated ordinance article heading ",
+            )) for error in source_errors
+        ):
+            errors.append(f"invalid 원문오류: {rel}")
+        if f"> {SOURCE_WARNING}" not in body or "```text\n" not in body:
+            errors.append(f"missing source preservation notice or text: {rel}")
     ordinance_id = safe_path_part(str(fm.get("자치법규ID", "")))
     name = safe_path_part(fm.get("자치법규명", ""), suffix_on_truncate=ordinance_id)
     expected = Path(

@@ -10,7 +10,7 @@ from core.atomic_io import atomic_write_text
 
 from . import cache
 from .config import ORDINANCE_REPO
-from .converter import UnsupportedOrdinanceType, format_date, parse_ordinance_xml, reset_path_registry, xml_to_markdown
+from .converter import UnsupportedOrdinanceType, format_date, parse_ordinance_xml, reset_path_registry, source_fields_to_markdown, xml_to_markdown
 from .git_engine import commit_ordinance, commit_ordinance_deletion, committed_metadata
 
 logger = logging.getLogger(__name__)
@@ -130,6 +130,8 @@ def import_from_cache(
                 "identity": ordinance_id,
                 "metadata": detail["metadata"],
                 "repeal": _is_repeal_revision(detail["metadata"]),
+                "repeal_source": source_fields_to_markdown(detail)
+                if _is_repeal_revision(detail["metadata"]) and detail["source_errors"] else "",
                 "priority": int(cache_key.removeprefix("history/") == serial),
             }
             previous = candidates.get(serial)
@@ -190,10 +192,11 @@ def import_from_cache(
                     if commit_ordinance_deletion(
                         repo_dir,
                         deleted_path,
-                        build_commit_msg(meta),
+                        build_commit_msg(meta) + ("\n\n" + entry["repeal_source"] if entry["repeal_source"] else ""),
                         date,
                         entry["serial"],
                         skip_dedup=skip_dedup,
+                        preserve_message=bool(entry["repeal_source"]),
                     ):
                         counters["committed"] += 1
                 continue

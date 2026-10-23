@@ -233,13 +233,21 @@ def test_partial_import_recovers_without_reimporting_successful_revisions(tmp_pa
     monkeypatch.setattr(update, "fetch_all_current", lambda *args, **kwargs: entries)
     monkeypatch.setattr(update, "fetch_history_for_entries", lambda *args, **kwargs: entries)
     fixed_xml = SAMPLE_XML.replace("2000111", "2000112").replace("12345", "12346")
-    duplicate = '<조><조문번호>000100</조문번호><조문여부>Y</조문여부><조내용>제1조 중복</조내용></조>'
-    cache.put_detail("12346", fixed_xml.replace('</자치법규>', duplicate + '</자치법규>').encode(), historical=True)
+    cache.put_detail("12346", fixed_xml.encode(), historical=True)
+    from ordinances import import_ordinances
+    write = import_ordinances.atomic_write_text
+
+    def fail_second_write(path, text):
+        if "자치법규ID: '2000112'" in text:
+            raise OSError("temporary write failure")
+        write(path, text)
+
+    monkeypatch.setattr(import_ordinances, "atomic_write_text", fail_second_write)
     monkeypatch.setattr(sys, "argv", ["ordinances.update", "--repo", str(repo), "--commit"])
     with pytest.raises(SystemExit, match="errors=1, missing=1"):
         update.main()
     assert update._committed_metadata(repo)[0] == {"12345"}
-    cache.put_detail("12346", fixed_xml.encode(), historical=True)
+    monkeypatch.setattr(import_ordinances, "atomic_write_text", write)
     stats = update.run(repo=repo, commit=True)
     assert stats["committed"] == 1
     assert stats["missing"] == stats["errors"] == 0
@@ -365,9 +373,8 @@ def test_update_recovers_revision_from_negative_cache(tmp_path, monkeypatch):
     assert "12345" in update._committed_metadata(repo)[0]
 
 
-def test_cli_rejects_duplicate_article_numbers_before_writing(tmp_path, monkeypatch):
+def test_cli_preserves_duplicate_article_numbers(tmp_path, monkeypatch):
     import sys
-    import pytest
     from ordinances import cache
     from tests.test_ordinances.test_converter import SAMPLE_XML
 
@@ -375,15 +382,13 @@ def test_cli_rejects_duplicate_article_numbers_before_writing(tmp_path, monkeypa
     duplicate = '<조><조문번호>000100</조문번호><조문여부>Y</조문여부><조내용>제1조제1항의 담당자</조내용></조>'
     cache.put_detail("12345", SAMPLE_XML.replace('</자치법규>', duplicate + '</자치법규>').encode(), historical=True)
     monkeypatch.setattr(sys, "argv", ["ordinances.update", "--repo", str(repo), "--commit"])
-    with pytest.raises(SystemExit, match="errors=1"):
-        update.main()
-    assert not list(repo.rglob('본문.md'))
-    assert '12345' not in update._committed_metadata(repo)[0]
+    update.main()
+    assert "duplicate ordinance article 1" in next(repo.rglob("본문.md")).read_text()
+    assert "12345" in update._committed_metadata(repo)[0]
 
 
-def test_cli_rejects_repeated_article_heading_before_writing(tmp_path, monkeypatch):
+def test_cli_preserves_repeated_article_heading(tmp_path, monkeypatch):
     import sys
-    import pytest
     from ordinances import cache
     from tests.test_ordinances.test_converter import SAMPLE_XML
 
@@ -391,7 +396,6 @@ def test_cli_rejects_repeated_article_heading_before_writing(tmp_path, monkeypat
     malformed = SAMPLE_XML.replace("제1조(목적)", "제1조 제1조\n2(목적)")
     cache.put_detail("12345", malformed.encode(), historical=True)
     monkeypatch.setattr(sys, "argv", ["ordinances.update", "--repo", str(repo), "--commit"])
-    with pytest.raises(SystemExit, match="errors=1"):
-        update.main()
-    assert not list(repo.rglob("본문.md"))
-    assert "12345" not in update._committed_metadata(repo)[0]
+    update.main()
+    assert "제1조 제1조\n2(목적)" in next(repo.rglob("본문.md")).read_text()
+    assert "12345" in update._committed_metadata(repo)[0]

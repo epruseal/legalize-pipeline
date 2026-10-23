@@ -111,6 +111,7 @@ def commit_with_historical_date(
     author: str = BOT_AUTHOR,
     dedup_grep_key: str | None = None,
     allow_empty: bool = False,
+    preserve_message: bool = False,
 ) -> bool:
     """Stage and commit files with GIT_AUTHOR_DATE/GIT_COMMITTER_DATE set."""
     repo_dir = Path(repo_dir)
@@ -142,6 +143,7 @@ def commit_with_historical_date(
         env = historical_commit_env(date, author=author)
         _run_git(
             "commit",
+            *(["--cleanup=verbatim"] if preserve_message else []),
             "--allow-empty",
             "-m",
             message,
@@ -164,6 +166,7 @@ def commit_with_historical_date(
     env = historical_commit_env(date, author=author)
     _run_git(
         "commit",
+        *(["--cleanup=verbatim"] if preserve_message else []),
         "-m",
         message,
         "--author",
