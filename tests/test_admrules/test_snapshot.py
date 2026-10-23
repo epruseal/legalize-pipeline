@@ -471,6 +471,33 @@ def test_required_body_is_checked_before_any_snapshot_changes(tmp_path, monkeypa
     assert any('body regression' in error for error in validate_current_snapshot(repo, cache.CACHE_DIR / snapshot.SNAPSHOT_NAME))
 
 
+def test_current_content_repairs_bare_entity_for_snapshot(tmp_path, monkeypatch):
+    from admrules import converter
+
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path / "cache")
+    raw = detail("1").replace(b"</AdmRulService>", "<본문>A & B</본문></AdmRulService>".encode("utf-8"))
+    cache.put_detail("1", raw)
+
+    assert converter.has_current_content(raw)
+    result = snapshot.write_current_snapshot([source_row("1")])
+    assert result["required_body_ids"] == ["123"]
+
+
+def test_current_content_keeps_unrelated_xml_errors(tmp_path, monkeypatch):
+    from xml.etree import ElementTree
+
+    from admrules import converter
+
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path / "cache")
+    malformed = "<AdmRulService><본문>text</본문>".encode("utf-8")
+    cache.put_detail("1", malformed)
+
+    with pytest.raises(ElementTree.ParseError):
+        converter.has_current_content(malformed)
+    with pytest.raises(ElementTree.ParseError):
+        snapshot.write_current_snapshot([source_row("1")])
+
+
 def test_live_attachment_only_rule_preserves_original_file_links(tmp_path, monkeypatch):
     from admrules import api_client, converter
     from types import SimpleNamespace

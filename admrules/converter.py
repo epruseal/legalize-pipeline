@@ -482,7 +482,7 @@ def _source_attachment_nodes(root: ElementTree.Element) -> list[dict]:
 
 
 def has_current_content(raw: bytes) -> bool:
-    root = ElementTree.fromstring(raw)
+    root, _raw = parse_xml(raw, context="admrule current content")
     return bool(_plain_text(root) or _source_attachment_nodes(root))
 
 
