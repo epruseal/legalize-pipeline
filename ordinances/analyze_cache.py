@@ -6,6 +6,8 @@ from collections import Counter
 from pathlib import Path
 from xml.etree import ElementTree
 
+from core.xml import parse_xml
+
 from .cache import CACHE_DIR
 from .converter import format_date, normalize_ordinance_type
 from .jurisdictions import UnknownJurisdiction, split_jurisdiction
@@ -23,7 +25,7 @@ def analyze(cache_dir: Path = CACHE_DIR) -> dict:
     date_errors = 0
     total = 0
     for path in sorted(cache_dir.glob("*.xml")):
-        root = ElementTree.fromstring(path.read_bytes())
+        root, _raw = parse_xml(path.read_bytes(), context=f"cache analysis: {path.name}")
         total += 1
         ordinance_type = normalize_ordinance_type(_text(root, "자치법규종류"))
         counts_by_type[ordinance_type] += 1

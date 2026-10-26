@@ -8,6 +8,7 @@ from xml.etree import ElementTree
 import yaml
 
 from core.atomic_io import atomic_write_text
+from core.xml import parse_xml
 
 from . import cache
 from .config import ADMRULE_REPO
@@ -29,7 +30,7 @@ def _text(root: ElementTree.Element, tag: str) -> str:
 
 
 def metadata_from_raw(raw_xml: bytes | str) -> dict:
-    root = ElementTree.fromstring(raw_xml)
+    root, _raw = parse_xml(raw_xml, context="admrule metadata")
     return {
         "행정규칙ID": _text(root, "행정규칙ID"),
         "행정규칙일련번호": _text(root, "행정규칙일련번호") or _text(root, "ID"),

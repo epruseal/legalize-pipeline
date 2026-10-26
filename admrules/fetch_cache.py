@@ -3,10 +3,10 @@
 import argparse
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from xml.etree import ElementTree
 
 from core.counter import Counter
 from core.quota_budget import ensure_headroom, record_requests
+from core.xml import parse_xml
 
 from . import cache, checkpoint, detail_failure_allowlist
 from .api_client import get_admrule_detail, search_admrules
@@ -92,7 +92,7 @@ def _fetch_detail_task(serial_no: str, counter: Counter, refresh_current: bool =
     refresh = False
     if cached is not None:
         if refresh_current:
-            root = ElementTree.fromstring(cached)
+            root, _raw = parse_xml(cached, context=f"cached admrul detail ID={serial_no}")
             refresh = root.findtext(".//현행여부", "").strip().upper() == "N"
         if not refresh:
             counter.inc("cached")

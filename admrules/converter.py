@@ -9,6 +9,7 @@ from xml.etree import ElementTree
 import yaml
 
 from core.markdown import escape_accidental_markdown_links
+from core.xml import parse_xml
 
 from .config import VALID_ADMRULE_TYPES
 
@@ -480,7 +481,7 @@ def _source_attachment_nodes(root: ElementTree.Element) -> list[dict]:
 
 
 def has_current_content(raw: bytes) -> bool:
-    root = ElementTree.fromstring(raw)
+    root, _raw = parse_xml(raw, context="admrule current content")
     return bool(_plain_text(root) or _source_attachment_nodes(root))
 
 
@@ -609,7 +610,7 @@ def _render_structured_body(title: str, body: str) -> str:
 
 
 def xml_to_markdown(raw_xml: bytes | str, attachment_metadata: list[dict] | None = None) -> str:
-    root = ElementTree.fromstring(raw_xml)
+    root, _raw = parse_xml(raw_xml, context="admrule conversion")
     metadata = _metadata_from_xml(root)
     attachments = attachment_metadata if attachment_metadata is not None else _attachment_nodes(root)
     body = _plain_text(root)

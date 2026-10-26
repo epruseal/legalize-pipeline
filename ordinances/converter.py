@@ -8,6 +8,7 @@ from xml.etree import ElementTree
 import yaml
 
 from core.markdown import escape_accidental_markdown_links
+from core.xml import parse_xml
 from laws.converter import articles_to_markdown
 
 from .config import STORAGE_TYPES, TYPE_CODES
@@ -244,7 +245,7 @@ def _addenda_nodes(root: ElementTree.Element) -> list[dict]:
 
 
 def parse_ordinance_xml(raw_xml: bytes | str) -> dict:
-    root = ElementTree.fromstring(raw_xml)
+    root, _raw = parse_xml(raw_xml, context="ordinance conversion")
     metadata = {
         "자치법규ID": _text(root, ".//자치법규ID"),
         "자치법규일련번호": _text(root, ".//자치법규일련번호"),

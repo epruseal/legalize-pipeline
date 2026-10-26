@@ -195,3 +195,36 @@ def test_search_ordinances_raises_api_error(monkeypatch):
         assert "API error" in str(e)
     else:
         raise AssertionError("expected RuntimeError")
+
+
+def test_get_ordinance_detail_repairs_entity_before_cache_write(monkeypatch):
+    stored = []
+    monkeypatch.setattr(api_client.cache, "get_detail", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        api_client,
+        "_request",
+        lambda *args, **kwargs: Response(
+            "<OrdinanceService><자치법규ID>2000111</자치법규ID><본문>A & B</본문></OrdinanceService>".encode()
+        ),
+    )
+    monkeypatch.setattr(
+        api_client.cache,
+        "put_detail",
+        lambda cache_key, raw, **kwargs: stored.append((cache_key, raw, kwargs)),
+    )
+
+    raw = api_client.get_ordinance_detail("2000111")
+
+    assert raw.endswith("A &amp; B</본문></OrdinanceService>".encode())
+    assert stored == [("2000111", raw, {"historical": False})]
+
+
+def test_get_ordinance_detail_does_not_cache_incomplete_cdata(monkeypatch):
+    stored = []
+    monkeypatch.setattr(api_client.cache, "get_detail", lambda *args, **kwargs: None)
+    monkeypatch.setattr(api_client, "_request", lambda *args, **kwargs: Response("<OrdinanceService><![CDATA[A & B".encode()))
+    monkeypatch.setattr(api_client.cache, "put_detail", lambda *args, **kwargs: stored.append(args))
+
+    with pytest.raises(api_client.ElementTree.ParseError):
+        api_client.get_ordinance_detail("2000111")
+    assert stored == []

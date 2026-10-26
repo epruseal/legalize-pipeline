@@ -448,3 +448,10 @@ def test_html_to_markdown_unescapes_lt_gt():
 
 def test_html_to_markdown_collapses_korean_with_spaces():
     assert conv.html_to_markdown("【원고】   홍길동") == "【원고】 홍길동"
+
+
+def test_parse_precedent_xml_repairs_bare_entity():
+    result = conv.parse_precedent_xml(VALID_XML.replace("손해배상(기)".encode(), "손해 & 배상".encode()))
+
+    assert result is not None
+    assert result["사건명"] == "손해 & 배상"

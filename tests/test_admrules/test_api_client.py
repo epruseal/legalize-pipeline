@@ -1,5 +1,9 @@
 """Tests for admrules/api_client.py."""
 
+from xml.etree import ElementTree
+
+import pytest
+
 from admrules import api_client
 
 
@@ -103,7 +107,6 @@ def test_search_admrules_raises_api_error(monkeypatch):
 
 
 def test_search_rejects_wrong_root_and_page(monkeypatch):
-    import pytest
     for content in [b"<html />", b"<AdmRulSearch><totalCnt>1</totalCnt><page>2</page></AdmRulSearch>"]:
         monkeypatch.setattr(api_client, "_request", lambda *args: Response(content))
         with pytest.raises(RuntimeError):
@@ -120,7 +123,6 @@ def test_refresh_fetches_new_detail_instead_of_stale_status(monkeypatch):
 
 
 def test_wrong_serial_response_does_not_overwrite_cached_revision(tmp_path, monkeypatch):
-    import pytest
     monkeypatch.setattr(api_client.cache, "CACHE_DIR", tmp_path)
     previous = b'<AdmRulService><ID>123</ID></AdmRulService>'
     api_client.cache.put_detail("123", previous)
@@ -132,7 +134,6 @@ def test_wrong_serial_response_does_not_overwrite_cached_revision(tmp_path, monk
 
 
 def test_no_result_response_preserves_cached_revision(tmp_path, monkeypatch, fixtures_dir):
-    import pytest
     monkeypatch.setattr(api_client.cache, "CACHE_DIR", tmp_path)
     previous = b'<AdmRulService><ID>123</ID></AdmRulService>'
     api_client.cache.put_detail("123", previous)
@@ -143,3 +144,41 @@ def test_no_result_response_preserves_cached_revision(tmp_path, monkeypatch, fix
         api_client.get_admrule_detail("123", refresh=True)
 
     assert api_client.cache.get_detail("123") == previous
+
+
+def test_get_admrule_detail_repairs_entity_before_cache_write(monkeypatch):
+    stored = []
+    monkeypatch.setattr(api_client.cache, "get_detail", lambda serial: None)
+    monkeypatch.setattr(
+        api_client,
+        "_request",
+        lambda *args: Response("<AdmRulService><ID>123</ID><본문>A & B</본문></AdmRulService>".encode()),
+    )
+    monkeypatch.setattr(api_client.cache, "put_detail", lambda serial, raw: stored.append((serial, raw)))
+
+    raw = api_client.get_admrule_detail("123")
+
+    assert raw == "<AdmRulService><ID>123</ID><본문>A &amp; B</본문></AdmRulService>".encode()
+    assert stored == [("123", raw)]
+
+
+def test_get_admrule_detail_does_not_cache_malformed_xml(monkeypatch):
+    stored = []
+    monkeypatch.setattr(api_client.cache, "get_detail", lambda serial: None)
+    monkeypatch.setattr(api_client, "_request", lambda *args: Response("<AdmRulService><![CDATA[A & B".encode()))
+    monkeypatch.setattr(api_client.cache, "put_detail", lambda *args: stored.append(args))
+
+    with pytest.raises(ElementTree.ParseError):
+        api_client.get_admrule_detail("123")
+    assert stored == []
+
+
+def test_get_admrule_detail_does_not_cache_utf16_bytes(tmp_path, monkeypatch):
+    monkeypatch.setattr(api_client.cache, "CACHE_DIR", tmp_path)
+    raw = "<AdmRulService><ID>123</ID>A & B</AdmRulService>".encode("utf-16-le")
+    monkeypatch.setattr(api_client, "_request", lambda *args: Response(raw))
+
+    with pytest.raises(ElementTree.ParseError):
+        api_client.get_admrule_detail("123")
+
+    assert list(tmp_path.rglob("*.xml")) == []

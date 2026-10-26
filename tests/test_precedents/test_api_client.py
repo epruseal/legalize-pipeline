@@ -1,6 +1,7 @@
 """Tests for precedents/api_client.py."""
 
 from pathlib import Path
+from xml.etree import ElementTree
 
 import pytest
 import responses as responses_lib
@@ -91,3 +92,25 @@ def test_get_precedent_detail_no_result_raises_and_does_not_cache():
         prec_api.get_precedent_detail("999999")
     assert excinfo.value.prec_id == "999999"
     assert prec_cache.get_detail("999999") is None
+
+
+@responses_lib.activate
+def test_get_precedent_detail_repairs_entity_before_cache_write():
+    raw = "<PrecService><판례정보일련번호>123456</판례정보일련번호><판례내용>A & B</판례내용></PrecService>".encode()
+    responses_lib.add(responses_lib.GET, f"{LAW_API_BASE}/lawService.do", body=raw, status=200)
+
+    result = prec_api.get_precedent_detail("123456")
+
+    assert result.endswith("A &amp; B</판례내용></PrecService>".encode())
+    assert prec_cache.get_detail("123456") == result
+
+
+@responses_lib.activate
+def test_get_precedent_detail_does_not_cache_utf16_bytes():
+    raw = "<PrecService><id>123456</id>A & B</PrecService>".encode("utf-16-le")
+    responses_lib.add(responses_lib.GET, f"{LAW_API_BASE}/lawService.do", body=raw, status=200)
+
+    with pytest.raises(ElementTree.ParseError):
+        prec_api.get_precedent_detail("123456")
+
+    assert prec_cache.get_detail("123456") is None
