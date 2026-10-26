@@ -60,22 +60,62 @@ def test_parse_xml_preserves_valid_string_tree_and_normalizes_declaration(declar
     assert _tree_state(reparsed) == _tree_state(expected)
 
 
-def test_parse_xml_repairs_string_entities_without_changing_protected_regions():
+@pytest.mark.parametrize("bom", ["", "\ufeff"])
+def test_parse_xml_repairs_string_entities_without_changing_protected_regions(bom):
+    protected = '<?xml version="1.0" encoding="ISO-8859-1"?>'
+    pi_like = 'xml version="1.0" encoding="ISO-8859-1" A & B'
     raw = (
-        '<?xml version="1.0" encoding="ISO-8859-1"?>'
-        '<root attr="A & B"><![CDATA[A & B]]><!-- A & B --><?source A & B?>'
-        '<child>C & D</child>tail & E</root>'
+        f'{bom}<?xml version="1.0" encoding="ISO-8859-1"?>'
+        f'<root attr="A & B"><![CDATA[{protected} A & B]]><!-- {protected} A & B -->'
+        f'<?source {pi_like}?><child>C & D</child>tail & E</root>'
     )
 
     root, parsed = parse_xml(raw, context="test")
 
     assert root.get("attr") == "A & B"
     assert root.findtext("child") == "C & D"
+    assert protected.encode() in parsed
     assert parsed == (
-        b'<?xml version="1.0" encoding="UTF-8"?>'
-        b'<root attr="A &amp; B"><![CDATA[A & B]]><!-- A & B --><?source A & B?>'
-        b'<child>C &amp; D</child>tail &amp; E</root>'
+        f'{bom}<?xml version="1.0" encoding="UTF-8"?>'
+        f'<root attr="A &amp; B"><![CDATA[{protected} A & B]]><!-- {protected} A & B -->'
+        f'<?source {pi_like}?><child>C &amp; D</child>tail &amp; E</root>'
+    ).encode()
+
+
+@pytest.mark.parametrize("bom", ["", "\ufeff"])
+def test_parse_xml_does_not_normalize_declaration_like_text_in_valid_string(bom):
+    protected = '<?xml version="1.0" encoding="ISO-8859-1"?>'
+    raw = (
+        f'{bom}<root><![CDATA[{protected}]]><!-- {protected} -->'
+        f'<?source xml version="1.0" encoding="ISO-8859-1"?></root>'
     )
+
+    _root, parsed = parse_xml(raw, context="test")
+
+    assert parsed == raw.encode()
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        '<?xml version="1.0" encoding="UTF 8"?>',
+        '<?xml version="1.0" encoding="1UTF8"?>',
+        '<?xml version="1.0" encoding="UTF@8"?>',
+        '<?xml version="1.0" standalone="maybe"?>',
+        '<?xml version="1.0" encoding="UTF-8"',
+    ],
+)
+def test_parse_xml_preserves_invalid_string_declaration_error(declaration):
+    raw = f"{declaration}<root>A & B</root>"
+    with pytest.raises(ElementTree.ParseError) as expected:
+        ElementTree.fromstring(raw)
+
+    with pytest.raises(ElementTree.ParseError) as actual:
+        parse_xml(raw, context="test")
+
+    assert str(actual.value) == str(expected.value)
+    assert actual.value.code == expected.value.code
+    assert actual.value.position == expected.value.position
 
 
 @pytest.mark.parametrize(

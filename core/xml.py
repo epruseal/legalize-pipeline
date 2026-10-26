@@ -7,7 +7,7 @@ from xml.etree import ElementTree
 logger = logging.getLogger(__name__)
 
 _VALID_ENTITY_PREFIXES = ("amp;", "lt;", "gt;", "apos;", "quot;")
-_XML_DECLARATION = re.compile(r"(﻿?<\?xml\s+[^>]*?\bencoding\s*=\s*[\"'])[^\"']+([\"'][^>]*\?>)", re.IGNORECASE)
+_XML_DECLARATION = re.compile(r"\A(﻿?<\?xml\s+[^>]*?\bencoding\s*=\s*[\"'])[^\"']+([\"'][^>]*\?>)", re.IGNORECASE)
 
 
 def _find_protected_end(text: str, start: int, prefix: str, suffix: str) -> int | None:
@@ -54,7 +54,12 @@ def _escape_entities(text: str) -> str:
 
 
 def _normalize_string_bytes(text: str) -> bytes:
-    return _XML_DECLARATION.sub(r"\1UTF-8\2", text, count=1).encode("utf-8")
+    match = _XML_DECLARATION.match(text)
+    if match is None:
+        return text.encode("utf-8")
+    declaration = match.group(0)
+    ElementTree.fromstring(f"{declaration}<root />")
+    return f"{match.group(1)}UTF-8{match.group(2)}{text[match.end():]}".encode("utf-8")
 
 
 def repair_undefined_entities(raw: bytes | str) -> bytes:
@@ -100,7 +105,10 @@ def parse_xml(raw: bytes | str, *, context: str = "XML") -> tuple[ElementTree.El
         try:
             root = ElementTree.fromstring(raw)
         except ElementTree.ParseError as error:
-            repaired = repair_undefined_entities(raw)
+            try:
+                repaired = repair_undefined_entities(raw)
+            except ElementTree.ParseError:
+                raise error
             try:
                 root = ElementTree.fromstring(repaired)
             except ElementTree.ParseError:
