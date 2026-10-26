@@ -70,6 +70,10 @@ def repair_undefined_entities(raw: bytes | str) -> bytes:
         text = raw.decode("utf-8")
     except UnicodeDecodeError:
         return raw
+    if "\0" in text:
+        # BOM 없는 UTF-16 같은 비UTF-8 bytes는 NUL이 섞인 UTF-8로 decode된다.
+        # XML 1.0은 NUL을 허용하지 않으므로 복구하지 않고 원래 오류를 유지한다.
+        return raw
 
     result: list[str] = []
     text_start = 0

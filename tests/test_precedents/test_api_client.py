@@ -1,6 +1,7 @@
 """Tests for precedents/api_client.py."""
 
 from pathlib import Path
+from xml.etree import ElementTree
 
 import pytest
 import responses as responses_lib
@@ -102,3 +103,14 @@ def test_get_precedent_detail_repairs_entity_before_cache_write():
 
     assert result.endswith("A &amp; B</판례내용></PrecService>".encode())
     assert prec_cache.get_detail("123456") == result
+
+
+@responses_lib.activate
+def test_get_precedent_detail_does_not_cache_utf16_bytes():
+    raw = "<PrecService><판례정보일련번호>123456</판례정보일련번호>A & B</PrecService>".encode("utf-16-le")
+    responses_lib.add(responses_lib.GET, f"{LAW_API_BASE}/lawService.do", body=raw, status=200)
+
+    with pytest.raises(ElementTree.ParseError):
+        prec_api.get_precedent_detail("123456")
+
+    assert prec_cache.get_detail("123456") is None

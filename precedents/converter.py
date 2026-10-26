@@ -5,11 +5,10 @@ import re
 import unicodedata
 from xml.etree import ElementTree
 
-from core.xml import parse_xml
-
 import yaml
 
 from core.markdown import escape_accidental_markdown_links
+from core.xml import parse_xml
 
 from .config import COURT_TIER_MAP, KNOWN_CASE_TYPES
 

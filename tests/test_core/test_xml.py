@@ -150,3 +150,38 @@ def test_parse_xml_preserves_errors_for_incomplete_protected_regions_and_dtd(raw
 
     with pytest.raises(ElementTree.ParseError):
         parse_xml(raw, context="test")
+
+
+_NUL_BYTES = [
+    "<r>A & B</r>".encode("utf-16-le"),
+    '<?xml version="1.0" encoding="UTF-16"?><r>A & B</r>'.encode("utf-16-le"),
+    "<r>A & B</r>".encode("utf-16-be"),
+    "<r>A & B</r>".encode("utf-16"),
+    "<판례>A & B</판례>".encode("utf-16-le"),
+]
+
+
+@pytest.mark.parametrize("raw", _NUL_BYTES)
+def test_parse_xml_preserves_error_for_non_utf8_bytes_with_nul(raw):
+    assert repair_undefined_entities(raw) is raw
+    with pytest.raises(ElementTree.ParseError) as expected:
+        ElementTree.fromstring(raw)
+
+    with pytest.raises(ElementTree.ParseError) as actual:
+        parse_xml(raw, context="test")
+
+    assert str(actual.value) == str(expected.value)
+    assert actual.value.code == expected.value.code
+    assert actual.value.position == expected.value.position
+
+
+def test_parse_xml_preserves_error_for_string_with_nul():
+    raw = "<r>A & B\0</r>"
+    with pytest.raises(ElementTree.ParseError) as expected:
+        ElementTree.fromstring(raw)
+
+    with pytest.raises(ElementTree.ParseError) as actual:
+        parse_xml(raw, context="test")
+
+    assert str(actual.value) == str(expected.value)
+    assert actual.value.position == expected.value.position
