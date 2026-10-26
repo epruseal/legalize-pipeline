@@ -168,8 +168,6 @@ def test_get_admrule_detail_does_not_cache_malformed_xml(monkeypatch):
     monkeypatch.setattr(api_client, "_request", lambda *args: Response("<AdmRulService><![CDATA[A & B".encode()))
     monkeypatch.setattr(api_client.cache, "put_detail", lambda *args: stored.append(args))
 
-    from xml.etree import ElementTree
-
     with pytest.raises(ElementTree.ParseError):
         api_client.get_admrule_detail("123")
     assert stored == []

@@ -3,7 +3,6 @@
 import html
 import re
 import unicodedata
-from xml.etree import ElementTree
 
 import yaml
 

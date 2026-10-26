@@ -107,7 +107,7 @@ def test_get_precedent_detail_repairs_entity_before_cache_write():
 
 @responses_lib.activate
 def test_get_precedent_detail_does_not_cache_utf16_bytes():
-    raw = "<PrecService><판례정보일련번호>123456</판례정보일련번호>A & B</PrecService>".encode("utf-16-le")
+    raw = "<PrecService><id>123456</id>A & B</PrecService>".encode("utf-16-le")
     responses_lib.add(responses_lib.GET, f"{LAW_API_BASE}/lawService.do", body=raw, status=200)
 
     with pytest.raises(ElementTree.ParseError):

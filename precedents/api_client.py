@@ -1,7 +1,6 @@
 """Thin wrapper around law.go.kr OpenAPI for precedents."""
 
 import logging
-from xml.etree import ElementTree
 
 import requests
 
