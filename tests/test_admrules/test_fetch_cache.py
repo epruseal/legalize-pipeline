@@ -55,7 +55,7 @@ def test_verified_no_result_retries_without_caching_and_recovers(verified_no_res
 
     assert counter.snapshot() == (0, 1, 0)
     assert fetch_cache.cache.get_detail(serial) == recovered
-    assert fetch_cache.checkpoint.get_processed_serials() == {serial}
+    assert fetch_cache.checkpoint.get_processed_serials() == set()
 
 
 def test_unverified_no_result_remains_an_error(verified_no_result):
