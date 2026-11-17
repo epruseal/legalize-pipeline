@@ -14,6 +14,13 @@
 # Loader: admrules/detail_failure_allowlist.py
 
 entries:
+  # Verified 2026-11-03: the detail API and official page report no result.
+  # The complete nw=1 list (24,235 rows) also omits this serial.
+  # Evidence: tests/fixtures/admrule_no_result_2100000287624.json
+  - serial: "2100000287624"
+    reason: "upstream_no_result"
+    expected_error: "no admrule detail for ID=2100000287624"
+    expires_on: "2026-12-03"
   # Verified 2026-07-05 by full admrul history=True/nw=2 cache refresh
   # and direct lawService.do probes for each missing serial.
   - serial: "2100000027840"
@@ -95,23 +102,28 @@ entries:
   - serial: "10000051058"
     reason: "upstream_malformed_xml"
     expected_error: "not well-formed"
-    expires_on: "2026-10-31"
+    # Revalidated 2026-11-02; evidence: tests/fixtures/detail_failures_20261102.json
+    expires_on: "2027-01-31"
   - serial: "10000051061"
     reason: "upstream_malformed_xml"
     expected_error: "not well-formed"
-    expires_on: "2026-10-31"
+    # Revalidated 2026-11-02; evidence: tests/fixtures/detail_failures_20261102.json
+    expires_on: "2027-01-31"
   - serial: "10000051060"
     reason: "upstream_malformed_xml"
     expected_error: "not well-formed"
-    expires_on: "2026-10-31"
+    # Revalidated 2026-11-02; evidence: tests/fixtures/detail_failures_20261102.json
+    expires_on: "2027-01-31"
   - serial: "10000051062"
     reason: "upstream_malformed_xml"
     expected_error: "not well-formed"
-    expires_on: "2026-10-31"
+    # Revalidated 2026-11-02; evidence: tests/fixtures/detail_failures_20261102.json
+    expires_on: "2027-01-31"
   - serial: "10000051063"
     reason: "upstream_malformed_xml"
     expected_error: "not well-formed"
-    expires_on: "2026-10-31"
+    # Revalidated 2026-11-02; evidence: tests/fixtures/detail_failures_20261102.json
+    expires_on: "2027-01-31"
   - serial: "2100000035941"
     reason: "upstream_http_500"
     expected_error: "500 Server Error"
@@ -507,15 +519,18 @@ entries:
   - serial: "2000000002205"
     reason: "upstream_html_error_page"
     expected_error: "unexpected admrule detail root tag"
-    expires_on: "2026-10-31"
+    # Revalidated 2026-11-02; evidence: tests/fixtures/detail_failures_20261102.json
+    expires_on: "2027-01-31"
   - serial: "2100000001014"
     reason: "upstream_html_error_page"
     expected_error: "unexpected admrule detail root tag"
-    expires_on: "2026-10-31"
+    # Revalidated 2026-11-02; evidence: tests/fixtures/detail_failures_20261102.json
+    expires_on: "2027-01-31"
   - serial: "2100000001016"
     reason: "upstream_html_error_page"
     expected_error: "unexpected admrule detail root tag"
-    expires_on: "2026-10-31"
+    # Revalidated 2026-11-02; evidence: tests/fixtures/detail_failures_20261102.json
+    expires_on: "2027-01-31"
 
   # 2026-07-24 재수집에서 발견. XML/HTML/브라우저 모두 HTTP 500,
   # JSON 은 빈 객체({}) — nw=2 검색엔 있으나 상세 데이터 부재(유령 레코드).
