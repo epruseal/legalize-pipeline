@@ -387,3 +387,16 @@ def test_quarantines_unsupported_type(tmp_path: Path, monkeypatch):
         converter.ordinance_to_markdown(detail)
 
     assert "type_quarantined" in failure_path.read_text(encoding="utf-8")
+
+
+def test_xml_to_markdown_removes_nul_only_while_parsing(caplog):
+    import logging
+
+    raw = (Path(__file__).parents[1] / "fixtures" / "ordinances" / "nul-in-cdata.xml").read_bytes()
+    with caplog.at_level(logging.WARNING, logger="core.xml"):
+        _path, markdown = converter.xml_to_markdown(raw)
+    assert "\x00" not in markdown
+    assert "이 조례는 시험을 목적으로 한다." in markdown
+    assert [r.getMessage() for r in caplog.records if r.name == "core.xml"] == [
+        "Removed 3 NUL character(s) from ordinance conversion before parsing"
+    ]

@@ -34,7 +34,7 @@ def detail_path(cache_key: str, *, historical: bool = False) -> Path:
 
 def _serial_from_raw(raw: bytes) -> str:
     try:
-        root, _repaired = parse_xml(raw, context="ordinance cache")
+        root, _repaired = parse_xml(raw, context="ordinance cache", strip_nul=True)
         return (root.findtext(".//자치법규일련번호") or "").strip()
     except ElementTree.ParseError:
         return ""
