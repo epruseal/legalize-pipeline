@@ -32,8 +32,8 @@ def test_repeated_upstream_failures_are_grouped_and_expiring():
     detail_failure_allowlist.load_allowlist.cache_clear()
 
     malformed = detail_failure_allowlist.accepted_entry(
-        "478868",
-        ElementTree.ParseError("not well-formed (invalid token): line 1, column 1"),
+        "2000603",
+        ElementTree.ParseError("mismatched tag: line 1, column 1"),
         today=date(2026, 7, 18),
     )
     missing = detail_failure_allowlist.accepted_entry(
@@ -51,7 +51,7 @@ def test_repeated_upstream_failures_are_grouped_and_expiring():
     assert missing is not None and missing["reason"] == "upstream_missing_serial"
     assert upstream_500 is not None and upstream_500["reason"] == "upstream_http_500"
     assert not detail_failure_allowlist.is_listed("1124911", today=date(2026, 7, 18))
-    assert not detail_failure_allowlist.is_listed("478868", today=date(2027, 1, 31))
+    assert not detail_failure_allowlist.is_listed("2000603", today=date(2027, 1, 31))
 
 
 def test_latest_repeated_upstream_failures_are_quarantined():
