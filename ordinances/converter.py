@@ -246,7 +246,7 @@ def _addenda_nodes(root: ElementTree.Element) -> list[dict]:
 
 
 def parse_ordinance_xml(raw_xml: bytes | str) -> dict:
-    root, _raw = parse_xml(raw_xml, context="ordinance conversion")
+    root, _raw = parse_xml(raw_xml, context="ordinance conversion", strip_nul=True)
     metadata = {
         "자치법규ID": _text(root, ".//자치법규ID"),
         "자치법규일련번호": _text(root, ".//자치법규일련번호"),

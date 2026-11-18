@@ -144,7 +144,7 @@ def get_ordinance_detail(
         timeout=DETAIL_REQUEST_TIMEOUT_SECONDS,
         non_retry_statuses={404},
     )
-    root, raw = parse_xml(resp.content, context=f"ordin detail ID={ordinance_id}")
+    root, raw = parse_xml(resp.content, context=f"ordin detail ID={ordinance_id} MST={mst}", strip_nul=True)
     _require_no_api_error(root, f"ordin detail ID={ordinance_id}")
     root_text = "".join(root.itertext())
     if root.tag == "Law" and "일치하는 자치법규가 없습니다" in root_text:

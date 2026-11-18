@@ -1,3 +1,4 @@
 # Preserve the exact bytes used by upstream response fingerprints.
 tests/fixtures/ordinances/upstream-*.xml -text
 tests/fixtures/admrule_duplicate_current_2088530/*.xml -text -whitespace
+tests/fixtures/ordinances/nul-in-cdata.xml -text

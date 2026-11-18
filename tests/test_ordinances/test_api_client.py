@@ -1,7 +1,11 @@
 """Tests for ordinances/api_client.py."""
 
+import logging
+from pathlib import Path
+
 import pytest
 
+from core.xml import repair_undefined_entities
 from ordinances import api_client
 
 
@@ -208,3 +212,45 @@ def test_search_ordinances_raises_api_error(monkeypatch):
         assert "API error" in str(e)
     else:
         raise AssertionError("expected RuntimeError")
+
+
+NUL_FIXTURE = Path(__file__).parents[1] / "fixtures" / "ordinances" / "nul-in-cdata.xml"
+
+
+def _detail_with_temp_cache(tmp_path, monkeypatch, response: bytes):
+    monkeypatch.setattr(api_client.cache, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(api_client.cache, "HISTORY_DIR", tmp_path / "history")
+    monkeypatch.setattr(api_client, "_request", lambda url, params, **kwargs: Response(response))
+    api_client.get_ordinance_detail("2000159", mst="480037")
+    return (tmp_path / "history" / "480037.xml").read_bytes()
+
+
+def _xml_warnings(caplog):
+    return [record.getMessage() for record in caplog.records if record.name == "core.xml" and record.levelno == logging.WARNING]
+
+
+def test_get_ordinance_detail_caches_nul_response_bytes(tmp_path, monkeypatch, caplog):
+    response = NUL_FIXTURE.read_bytes()
+    with caplog.at_level(logging.WARNING, logger="core.xml"):
+        cached = _detail_with_temp_cache(tmp_path, monkeypatch, response)
+    assert cached == response
+    assert cached.count(b"\x00") == 3
+    assert _xml_warnings(caplog) == [
+        "Removed 3 NUL character(s) from ordin detail ID=2000159 MST=480037 before parsing"
+    ]
+
+
+def test_get_ordinance_detail_caches_entity_repair_with_nul(tmp_path, monkeypatch, caplog):
+    response = NUL_FIXTURE.read_bytes().replace(
+        "<담당부서명>조직담당관</담당부서명>".encode(), "<담당부서명>조직 & 담당관</담당부서명>".encode()
+    )
+    assert response.count(b" & ") == 1
+    with caplog.at_level(logging.WARNING, logger="core.xml"):
+        cached = _detail_with_temp_cache(tmp_path, monkeypatch, response)
+    assert cached == repair_undefined_entities(response)
+    assert cached != response
+    assert cached.count(b"\x00") == response.count(b"\x00") == 3
+    assert sorted(_xml_warnings(caplog)) == [
+        "Removed 3 NUL character(s) from ordin detail ID=2000159 MST=480037 before parsing",
+        "Repaired undefined XML entity in ordin detail ID=2000159 MST=480037",
+    ]

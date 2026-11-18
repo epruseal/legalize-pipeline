@@ -1,5 +1,8 @@
 """Tests for the mixed legacy-ID and serial-key ordinance cache layout."""
 
+import logging
+from pathlib import Path
+
 from ordinances import cache
 from .test_converter import SAMPLE_XML
 
@@ -49,3 +52,35 @@ def test_no_result_serials_round_trip(tmp_path, monkeypatch):
     cache.add_no_result_serial("111")
 
     assert cache.load_no_result_serials() == {"111", "222"}
+
+
+NUL_FIXTURE = Path(__file__).parents[1] / "fixtures" / "ordinances" / "nul-in-cdata.xml"
+
+
+def test_serial_from_raw_reads_nul_source(caplog):
+    with caplog.at_level(logging.WARNING, logger="core.xml"):
+        assert cache._serial_from_raw(NUL_FIXTURE.read_bytes()) == "480037"
+    assert [r.getMessage() for r in caplog.records if r.name == "core.xml"] == [
+        "Removed 3 NUL character(s) from ordinance cache before parsing"
+    ]
+
+
+def test_get_detail_returns_legacy_nul_source_unchanged(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(cache, "HISTORY_DIR", tmp_path / "history")
+    raw = NUL_FIXTURE.read_bytes()
+    (tmp_path / "480037.xml").write_bytes(raw)
+    assert cache.get_detail("480037", historical=True) == raw
+
+
+def test_seed_history_from_current_links_legacy_nul_source(tmp_path, monkeypatch):
+    history_dir = tmp_path / "history"
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(cache, "HISTORY_DIR", history_dir)
+    raw = NUL_FIXTURE.read_bytes()
+    (tmp_path / "2000159.xml").write_bytes(raw)
+
+    stats = cache.seed_history_from_current()
+
+    assert stats["seeded"] == 1
+    assert (history_dir / "480037.xml").read_bytes() == raw

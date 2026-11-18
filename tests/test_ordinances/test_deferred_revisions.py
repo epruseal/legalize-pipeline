@@ -343,3 +343,17 @@ def test_all_known_source_defects_are_retried_after_the_search_window(tmp_path, 
     assert stats["fetched"] == stats["committed"] == len(REVIEWED_SOURCES)
     assert stats["errors"] == stats["missing"] == stats["deferred"] == 0
     assert subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"]) != before
+
+
+def test_attachment_locator_fingerprint_reads_nul_source(caplog):
+    import logging
+
+    raw = (FIXTURES / "nul-in-cdata.xml").read_bytes()
+    with caplog.at_level(logging.WARNING, logger="core.xml"):
+        fingerprint = deferred_revisions.attachment_locator_fingerprint(raw)
+    assert fingerprint == deferred_revisions.attachment_locator_fingerprint(raw.replace(b"\x00", b""))
+    assert [r.getMessage() for r in caplog.records if r.name == "core.xml"] == [
+        "Removed 3 NUL character(s) from ordinance deferred fingerprint before parsing"
+    ]
+    with pytest.raises(ElementTree.ParseError):
+        deferred_revisions.attachment_locator_fingerprint(b"<root>A & B\x00</root>")
