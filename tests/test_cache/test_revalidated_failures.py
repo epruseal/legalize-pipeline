@@ -10,6 +10,7 @@ import pytest
 from admrules import fetch_cache as admrules
 from core.counter import Counter
 from ordinances import fetch_cache as ordinances
+from tests.test_ordinances.nul_removed_serials import REMOVED_NUL_SERIALS
 
 
 class ProbeDate(date):
@@ -30,23 +31,37 @@ def test_revalidated_errors_remain_quarantined_and_expire(target, module, monkey
     monkeypatch.setattr(module.cache, "get_detail", lambda *args, **kwargs: None)
     processed = Mock()
     monkeypatch.setattr(module.checkpoint, "mark_detail_processed", processed)
+    failures = Mock()
     if target == "ordin":
-        monkeypatch.setattr(module, "append_failure", Mock())
+        monkeypatch.setattr(module, "append_failure", failures)
+    removed_serials = set(REMOVED_NUL_SERIALS) if target == "ordin" else set()
     counter = Counter()
+    removed_counter = Counter()
+    removed = []
     for record in records:
         serial = record.get("mst", record["id"])
         error = RuntimeError(record["error"])
+        is_removed = serial in removed_serials
+        if is_removed:
+            removed.append(record)
         if target == "admrul":
             monkeypatch.setattr(module, "get_admrule_detail", Mock(side_effect=error))
             module._fetch_detail_task(serial, counter)
         else:
             monkeypatch.setattr(module, "get_ordinance_detail", Mock(side_effect=error))
-            module._fetch_detail_task(record["id"], serial, counter, Mock())
+            module._fetch_detail_task(
+                record["id"], serial, removed_counter if is_removed else counter, Mock()
+            )
         assert allowlist.accepted_entry(serial, error, today=date(2027, 1, 31)) is None
         assert allowlist.accepted_entry(serial, RuntimeError("new failure")) is None
     assert counter.snapshot_all() == {
-        "cached": 0, "fetched": 0, "errors": 0, "known_failures": len(records),
+        "cached": 0, "fetched": 0, "errors": 0, "known_failures": len(records) - len(removed),
     }
+    # Serials whose only defect was NUL characters are no longer quarantined.
+    assert len(removed) == len(removed_serials)
+    assert removed_counter.snapshot_all().get("errors", 0) == len(removed)
+    assert removed_counter.snapshot_all().get("known_failures", 0) == 0
+    assert failures.call_count == len(removed)
     processed.assert_not_called()
 
 
